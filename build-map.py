@@ -889,7 +889,7 @@ def render_html(D):
     globals_html = "".join(f'<li><span class="what"><b>{E(l)}</b></span><code>{E(p)}</code></li>' for l, p in CFG.get("global_pieces", []))
 
     css = CSS_V2
-    js = JS_V2.replace("{port}", str(D["search_port"])).replace("{{", "{").replace("}}", "}")
+    js = JS_V2.replace("{port}", str(D["search_port"]))
     stamp = NOW.strftime("%a %b %d, %H:%M")
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>Workflow Map</title>'
@@ -1008,7 +1008,7 @@ function esc(t){return String(t).replace(/[&<>"]/g,function(c){return{'&':'&amp;
 var q=document.getElementById('q'),hits=document.getElementById('hits'),hl=document.getElementById('hits-list'),hn=document.getElementById('hits-n');
 function wire(){hl.querySelectorAll('.copy').forEach(function(b){b.onclick=async function(){try{await navigator.clipboard.writeText(b.dataset.copy);b.classList.add('done');var t=b.textContent;b.textContent='Copied';setTimeout(function(){b.classList.remove('done');b.textContent=t},1400)}catch(e){prompt('Copy this:',b.dataset.copy)}}})}
 q.addEventListener('input',function(){var v=q.value.trim().toLowerCase();
-document.querySelectorAll('.card').forEach(function(c){c.classList.toggle('hide',!!v&&c.dataset.search.indexOf(v)<0)});
+var cw=v.split(/\\s+/).filter(Boolean);document.querySelectorAll('.card').forEach(function(c){c.classList.toggle('hide',!!v&&!cw.every(function(w){return c.dataset.search.indexOf(w)>=0}))});
 document.querySelectorAll('section').forEach(function(s){if(!s.querySelector('.card'))return;var any=Array.prototype.some.call(s.querySelectorAll('.card'),function(c){return !c.classList.contains('hide')});s.style.display=any?'':'none'});
 if(!v){hits.hidden=true;return}
 var words=v.split(/\\s+/),m=LEDGER.filter(function(r){var h=(r.t+' '+r.f+' '+r.a+' '+r.d+' '+r.k).toLowerCase();return words.every(function(w){return h.indexOf(w)>=0})});
@@ -1016,13 +1016,13 @@ hn.textContent=m.length;hits.hidden=false;
 hl.innerHTML=m.slice(0,60).map(function(r){var k=r.k==='cowork'?'<span class="k k-cw">Claude tab</span>':(r.k==='terminal'?'<span class="k k-from">terminal</span>':'');var c=r.r&&r.id.length>20?'<button class="copy" data-copy="claude --resume '+esc(r.id)+'">copy resume</button>':'';return '<li><span class="when">'+esc(r.d||'')+'</span><span class="what">'+k+esc(r.t||'(untitled)')+'</span><span class="f">'+esc(r.f||'')+'</span><span class="act">'+c+'<span class="dim">'+esc(r.a||'')+'</span></span></li>'}).join('')+(m.length>60?'<li class="dim">and '+(m.length-60)+' more. Narrow the search.</li>':'');
 wire();deep(v)});
 var PORT={port},deepOK=null,deepT=null,deepEl=document.getElementById('deep'),deepList=document.getElementById('deep-list'),deepN=document.getElementById('deep-n'),deepOff=document.getElementById('deep-off'),deepLink=document.getElementById('deep-link');
-fetch('http://127.0.0.1:'+PORT+'/ping',{{mode:'cors'}}).then(function(r){{deepOK=r.ok}}).catch(function(){{deepOK=false}});
-function deep(v){{clearTimeout(deepT);if(!v){{deepEl.hidden=true;deepOff.hidden=true;return}}
-deepT=setTimeout(function(){{if(deepOK===false){{deepOff.hidden=false;deepEl.hidden=true;return}}
-fetch('http://127.0.0.1:'+PORT+'/search?q='+encodeURIComponent(v),{{mode:'cors'}}).then(function(r){{return r.json()}}).then(function(res){{deepOK=true;deepOff.hidden=true;deepEl.hidden=false;deepN.textContent=res.length;deepLink.href='http://127.0.0.1:'+PORT+'/?q='+encodeURIComponent(v);
-deepList.innerHTML=res.length?res.map(function(g){{var k=g.kind==='cowork'?'<span class="k k-cw">Claude tab</span>':'';var rs=(g.kind==='code'||g.kind==='terminal')?'<button class="copy" data-copy="claude --resume '+esc(g.session)+'">copy resume</button>':'';
-return '<div class="hit"><h4>'+k+'<a href="http://127.0.0.1:'+PORT+'/session?id='+encodeURIComponent(g.session)+'" target="_blank">'+esc(g.title)+'</a></h4><div class="meta"><span>'+esc((g.last_ts||'').slice(0,16))+'</span><span>'+esc(g.folder||'')+'</span><span>'+esc(g.account||'')+'</span><span>'+g.hits+' matching messages</span>'+rs+'</div>'+g.snippets.map(function(s){{return '<div class="snip"><span class="r">'+esc(s.role)+'</span>'+s.html+'</div>'}}).join('')+'</div>'}}).join(''):'<div class="dim">No conversation contains that.</div>';
-deepList.querySelectorAll('.copy').forEach(function(b){{b.onclick=async function(){{try{{await navigator.clipboard.writeText(b.dataset.copy);b.textContent='Copied'}}catch(e){{prompt('Copy this:',b.dataset.copy)}}}}}})}}).catch(function(){{deepOK=false;deepOff.hidden=false;deepEl.hidden=true}})}},250)}}
+fetch('http://127.0.0.1:'+PORT+'/ping',{mode:'cors'}).then(function(r){deepOK=r.ok}).catch(function(){deepOK=false});
+function deep(v){clearTimeout(deepT);if(!v){deepEl.hidden=true;deepOff.hidden=true;return}
+deepT=setTimeout(function(){if(deepOK===false){deepOff.hidden=false;deepEl.hidden=true;return}
+fetch('http://127.0.0.1:'+PORT+'/search?q='+encodeURIComponent(v),{mode:'cors'}).then(function(r){return r.json()}).then(function(res){deepOK=true;deepOff.hidden=true;deepEl.hidden=false;deepN.textContent=res.length;deepLink.href='http://127.0.0.1:'+PORT+'/?q='+encodeURIComponent(v);
+deepList.innerHTML=res.length?res.map(function(g){var k=g.kind==='cowork'?'<span class="k k-cw">Claude tab</span>':'';var rs=(g.kind==='code'||g.kind==='terminal')?'<button class="copy" data-copy="claude --resume '+esc(g.session)+'">copy resume</button>':'';
+return '<div class="hit"><h4>'+k+'<a href="http://127.0.0.1:'+PORT+'/session?id='+encodeURIComponent(g.session)+'" target="_blank">'+esc(g.title)+'</a></h4><div class="meta"><span>'+esc((g.last_ts||'').slice(0,16))+'</span><span>'+esc(g.folder||'')+'</span><span>'+esc(g.account||'')+'</span><span>'+g.hits+' matching messages</span>'+rs+'</div>'+g.snippets.map(function(s){return '<div class="snip"><span class="r">'+esc(s.role)+'</span>'+s.html+'</div>'}).join('')+'</div>'}).join(''):'<div class="dim">No conversation contains that.</div>';
+deepList.querySelectorAll('.copy').forEach(function(b){b.onclick=async function(){try{await navigator.clipboard.writeText(b.dataset.copy);b.textContent='Copied'}catch(e){prompt('Copy this:',b.dataset.copy)}}})}).catch(function(){deepOK=false;deepOff.hidden=false;deepEl.hidden=true})},250)}
 """
 
 

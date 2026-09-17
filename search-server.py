@@ -109,6 +109,13 @@ class H(BaseHTTPRequestHandler):
         T = titles()
         if u.path == "/ping":
             return self._send('{"ok":true}', "application/json")
+        if u.path == "/map":
+            try:
+                cfg = json.load(open(HERE / "config.json", encoding="utf-8"))
+                page_path = Path(cfg.get("output_html", HERE / "00-WORKFLOW-MAP.html"))
+                return self._send(page_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                return self._send(page("Map", f"<p>Map not built yet: {html.escape(str(e))}</p>"), code=404)
         if u.path == "/search":
             res = search_index.search(DB, q)
             for g in res:

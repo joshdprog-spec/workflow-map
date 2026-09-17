@@ -85,6 +85,8 @@ python search-server.py --query "pricing decision"     # from a terminal, or fro
 python search-server.py --session <id>                 # print one whole conversation
 ```
 
+While the server runs it also serves the map itself at `http://127.0.0.1:27183/map`, always the current build. Bookmark that instead of the file.
+
 Without the server the first two searches still work; the page just says conversation search is not running.
 
 ## The session-start line
