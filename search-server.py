@@ -123,7 +123,35 @@ class H(BaseHTTPRequestHandler):
                 g["folder"] = folder_of(g)
                 g["snippets"] = [{"role": r, "ts": ts, "html": mark(s)} for r, ts, s in g["snippets"]]
                 g.pop("best", None)
-            return self._send(json.dumps(res, ensure_ascii=False), "application/json")
+            files = search_index.search_files(DB, q)
+            for f in files:
+                f["snippet"] = mark(f["snippet"] or "")
+                f["name"] = os.path.basename(f["path"])
+                f["rel"] = f["path"]
+                try:
+                    f["rel"] = str(Path(f["path"]).relative_to(Path.home()))
+                except Exception:
+                    pass
+            return self._send(json.dumps({"conversations": res, "files": files}, ensure_ascii=False), "application/json")
+        if u.path == "/file":
+            # serve one document from under the user's home folder, read-only
+            raw = (qs.get("path") or [""])[0]
+            try:
+                fp = Path(raw).resolve()
+                fp.relative_to(Path.home().resolve())
+            except Exception:
+                return self._send(page("Not allowed", "<p>Only files under your home folder can be opened.</p>"), code=403)
+            if not fp.is_file():
+                return self._send(page("Not found", "<p>No such file.</p>"), code=404)
+            ext = fp.suffix.lower()
+            if ext in (".html", ".htm"):
+                return self._send(fp.read_text(encoding="utf-8", errors="replace"))
+            if ext == ".pdf":
+                b = fp.read_bytes(); self.send_response(200); self.send_header("Content-Type", "application/pdf"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
+            if ext in (".png", ".jpg", ".jpeg", ".svg", ".gif"):
+                b = fp.read_bytes(); self.send_response(200); self.send_header("Content-Type", {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "svg": "image/svg+xml", "gif": "image/gif"}[ext[1:]]); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
+            txt = fp.read_text(encoding="utf-8", errors="replace") if fp.stat().st_size < 4_000_000 else "(file too large to show)"
+            return self._send(page(fp.name, f"<p><span class='dim'>{html.escape(str(fp))}</span></p><div class='turn assistant' style='font-family:Consolas,monospace;font-size:13px'>{html.escape(txt)}</div>"))
         if u.path == "/session":
             return self._send(render_session((qs.get("id") or [""])[0], T))
         return self._send(render_results(q, search_index.search(DB, q) if q else [], T))

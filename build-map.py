@@ -536,6 +536,111 @@ def load_cowork_outputs(cowork):
     return out
 
 
+# ---------- products: the things being built, found by their own files ----------
+PRODUCT_SIGNALS = {
+    "ship_kit": re.compile(r"^(SHIP-KIT|LAUNCH-KIT|LAUNCH-CHECKLIST|GO-LIVE)[^/\\]*\.md$", re.I),
+    "sales_page": re.compile(r"^(index|sales|sales-page|landing|start-here)\.html$", re.I),
+    "offer": re.compile(r"^.*(OFFER-COPY|OFFER|PRICING|PRICING-EVIDENCE)[^/\\]*\.md$", re.I),
+    "bundle": re.compile(r"^.*\.zip$", re.I),
+    "course": re.compile(r"^(THE-COURSE|00-THE-COURSE|WEEK-1|COURSE)[^/\\]*\.md$", re.I),
+}
+STAGES = [("ship_kit", "Ready to launch"), ("sales_page", "Sales page built"), ("bundle", "Bundle built"), ("offer", "Offer drafted"), ("course", "Course drafted")]
+NOT_A_PRODUCT_DIR = re.compile(r"(deploy|_preview|preview|archive|_superseded|superseded|stale|old-|-old|_old|cloudflare|docs|tests?|fixtures?|node_modules|_to_delete|scrap|tmp|temp)", re.I)
+
+
+def _html_title(p):
+    try:
+        head = open(p, encoding="utf-8", errors="replace").read(4000)
+        m = re.search(r"<title[^>]*>(.*?)</title>", head, re.S | re.I) or re.search(r"<h1[^>]*>(.*?)</h1>", head, re.S | re.I)
+        return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()[:120] if m else ""
+    except Exception:
+        return ""
+
+
+def _md_title(p):
+    try:
+        head = open(p, encoding="utf-8", errors="replace").read(3000)
+        m = re.search(r"^\s*#\s+(.+)$", head, re.M)
+        return m.group(1).strip()[:120] if m else ""
+    except Exception:
+        return ""
+
+
+def detect_products(doc_roots, max_depth=5):
+    """A product is a folder (any depth) that carries launch signals: a ship kit, a sales page, an offer, a bundle, a course.
+    Signals found in a 'sales', 'bundle', 'site' or 'build' subfolder are credited to the parent, so one product is one card."""
+    found = {}
+    for project, root in doc_roots.items():
+        root = Path(root)
+        base = len(root.parts)
+        for cur, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".") and not NOT_A_PRODUCT_DIR.search(d)]
+            if len(Path(cur).parts) - base >= max_depth:
+                dirs[:] = []
+            here = Path(cur)
+            owner = here.parent if here.name.lower() in ("sales", "bundle", "site", "build", "html", "dist", "public") and here != root else here
+            for fn in files:
+                for sig, rx in PRODUCT_SIGNALS.items():
+                    if rx.match(fn):
+                        if sig == "sales_page" and fn.lower() == "start-here.html" and here.name.lower() == "bundle":
+                            continue
+                        e = found.setdefault(str(owner), {"folder": str(owner), "project": project, "signals": {}, "files": [], "mtime": 0})
+                        p = here / fn
+                        if sig == "sales_page" and sig in e["signals"]:
+                            # prefer a real sales page (in a sales folder, or index.html) over a start-here page
+                            cur_is_sales = "sales" in Path(e["signals"][sig]).parts[-2].lower() or Path(e["signals"][sig]).name.lower() == "index.html"
+                            new_is_sales = "sales" in here.name.lower() or fn.lower() == "index.html"
+                            if new_is_sales and not cur_is_sales:
+                                e["signals"][sig] = str(p)
+                        else:
+                            e["signals"].setdefault(sig, str(p))
+                        e["files"].append(str(p.relative_to(owner)))
+                        try:
+                            e["mtime"] = max(e["mtime"], p.stat().st_mtime)
+                        except Exception:
+                            pass
+    out = []
+    for e in found.values():
+        sig = e["signals"]
+        if not ({"ship_kit", "sales_page", "offer", "course"} & set(sig)):
+            continue  # a lone zip is not a product
+        name = ""
+        if "sales_page" in sig:
+            name = _html_title(sig["sales_page"])
+        if not name and "ship_kit" in sig:
+            name = _md_title(sig["ship_kit"]).replace("SHIP KIT", "").strip(" \u2014-:")
+        if not name and "offer" in sig:
+            name = _md_title(sig["offer"])
+        if not name and "course" in sig:
+            name = _md_title(sig["course"])
+        if not name:
+            name = Path(e["folder"]).name
+        stage = next(label for key, label in STAGES if key in sig)
+        rel = str(Path(e["folder"]).relative_to(ROOT)) if str(e["folder"]).lower().startswith(str(ROOT).lower()) else e["folder"]
+        name = re.sub(r"^(Start Here|START HERE)\s*[\u2014\-:]+\s*", "", name).strip()
+        tags = ""
+        for key, words in CFG.get("product_tags", {}).items():
+            if key.lower() in rel.lower() or key.lower() in name.lower():
+                tags = (tags + " " + words).strip()
+        out.append({"name": name, "stage": stage, "project": e["project"], "folder": e["folder"], "where": rel, "tags": tags,
+                    "page": sig.get("sales_page", ""), "ship_kit": sig.get("ship_kit", ""), "offer": sig.get("offer", ""), "course": sig.get("course", ""),
+                    "bundle": sig.get("bundle", ""), "last": datetime.datetime.fromtimestamp(e["mtime"]) if e["mtime"] else None, "n_files": len(e["files"])})
+    # manual additions / overrides from config
+    for m in CFG.get("products", []):
+        out.append({"name": m.get("name", "?"), "stage": m.get("stage", ""), "project": m.get("project", ""), "folder": m.get("folder", ""), "where": m.get("folder", ""),
+                    "tags": m.get("tags", ""), "page": m.get("page", ""), "ship_kit": "", "offer": "", "course": "", "bundle": "", "last": None, "n_files": 0})
+    rank = {label: i for i, (_, label) in enumerate(STAGES)}
+    out.sort(key=lambda x: (rank.get(x["stage"], 9), -(x["last"].timestamp() if x["last"] else 0)))
+    # one card per name: keep the best stage, newest
+    seen, dedup = set(), []
+    for x in out:
+        key = re.sub(r"\W+", " ", x["name"].lower()).strip()
+        if key in seen:
+            continue
+        seen.add(key); dedup.append(x)
+    return dedup
+
+
 # ---------- projects ----------
 def last_touched(folder, max_depth=2):
     best = 0
@@ -658,6 +763,15 @@ def build():
                 index_entries.append({"path": str(j), "session": j.stem, "kind": "code", "project": "(no folder)", "account": s_["email"] if s_ else "terminal"})
     update_search_index(index_entries)
     search_up = ensure_search_server()
+    doc_roots = {n: str(p["folder"]) for n, p in projects.items() if p["exists"]}
+    try:
+        sys.path.insert(0, str(HERE))
+        import search_index as _si
+        if CFG.get("search_index", True):
+            _si.update_files(HERE / "history" / "search.sqlite", doc_roots, log)
+    except Exception as e:
+        log(f"file index skipped: {e}")
+    products = detect_products(doc_roots)
     elsewhere = {n: [] for n in names}
     min_mentions = int(CFG.get("min_mentions", 6))  # a folder listing mentions a name once or twice; real work mentions it many times
     for fp, hits in mentions.items():
@@ -720,7 +834,7 @@ def build():
     return dict(accts=accts, current_key=current_key, current_info=current_info, rows=rows, tasks=tasks,
                 primary_email=primary_email, n_sessions=len(sessions), n_cowork=len(cowork), cowork=cowork_list,
                 mirrored=mirrored, ledger_n=ledger_n, search_up=search_up, search_port=int(CFG.get("search_port", 27183)),
-                claude_projects=claude_projects, cowork_outputs=cowork_outputs)
+                claude_projects=claude_projects, cowork_outputs=cowork_outputs, products=products)
 
 
 # ---------- render ----------

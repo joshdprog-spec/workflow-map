@@ -68,6 +68,16 @@ Set `"backup_transcripts": true` to also keep a copy of every transcript under `
 
 Claude Code deletes terminal transcripts after 30 days by default. `python install.py --keep-transcripts` raises that to ten years by setting `cleanupPeriodDays` in your Claude settings.
 
+## Things you are building
+
+The map finds products by their own files, not by folder name: a sales page, a ship kit or launch checklist, an offer or pricing file, a course, a bundle. Each becomes a card on Home named by the page's own title, with a stage (Ready to launch, Sales page built, Bundle built, Offer drafted, Course drafted) and buttons that open the page, the launch checklist, the offer or the course. Deploy copies, previews and archives are ignored.
+
+Attach the words you actually use with `product_tags` in `config.json`, for example `"system-v2": "climbing system valorant"`, so searching your own words finds the product. Add products the detector cannot see with a `products` list (`name, stage, folder, page, tags`).
+
+## Files are searchable too
+
+Every document in every project (Markdown, HTML, text, code, and the names of PDFs, images and zips) is indexed by name, title and first lines. Search results show a Files column with a link that opens the file from the local server. So "sales page", "launch", "offer copy" or a product's title find the actual file and show where it is.
+
 ## Assets that live per account
 
 Three sections read what each Claude account holds on this machine, so you can see across accounts in one place:
