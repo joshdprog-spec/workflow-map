@@ -5,6 +5,7 @@
     python install.py --dir PATH      install somewhere else
     python install.py --no-hook       install and build, but do not touch Claude settings
     python install.py --uninstall     remove the hook (and offer to delete the folder)
+    python install.py --shortcut      also put a "Workflow Map" shortcut on the Desktop and in the Start Menu (Windows)
     python install.py --machine NAME --publish-to DIR --merge-from DIR
                                       several computers, one map: publish this machine's history to a synced
                                       folder and merge what other machines published there
@@ -150,6 +151,31 @@ def install_skill():
     print(f"  skill installed at {dst} (say \"update my workflow map\" in any Claude session)")
 
 
+def make_shortcuts(dest):
+    """Windows: a 'Workflow Map' shortcut on the Desktop and in the Start Menu that runs open-map.pyw with pythonw."""
+    if sys.platform != "win32":
+        print(f"  shortcuts are Windows-only for now; open the map with: python {dest / 'open-map.pyw'}")
+        return
+    pyw = Path(sys.executable).with_name("pythonw.exe")
+    if not pyw.exists():
+        pyw = Path(sys.executable)
+    ps = f"""
+$sh = New-Object -ComObject WScript.Shell
+foreach ($dir in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {{
+  $lnk = $sh.CreateShortcut((Join-Path $dir 'Workflow Map.lnk'))
+  $lnk.TargetPath = '{pyw}'
+  $lnk.Arguments = '"{dest / "open-map.pyw"}"'
+  $lnk.WorkingDirectory = '{dest}'
+  $lnk.IconLocation = '{dest / "workflow-map.ico"},0'
+  $lnk.Description = 'Workflow Map: every project, session and product, at a glance'
+  $lnk.Save()
+  Write-Output ('  shortcut: ' + (Join-Path $dir 'Workflow Map.lnk'))
+}}
+"""
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True)
+    print(r.stdout.strip() or r.stderr.strip())
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default=str(DEFAULT_DIR), help="where to install (default ~/workflow-map)")
@@ -161,6 +187,7 @@ def main():
     ap.add_argument("--machine", default="", help="this computer's label on the map (default: its hostname)")
     ap.add_argument("--publish-to", default="", help="a folder in a synced drive (OneDrive, Google Drive); this machine drops its history there so other machines can merge it")
     ap.add_argument("--merge-from", action="append", default=[], help="another machine's published folder to merge in (repeatable)")
+    ap.add_argument("--shortcut", action="store_true", help="Windows: create Desktop and Start Menu shortcuts that open the map like an app")
     ap.add_argument("--uninstall", action="store_true")
     a = ap.parse_args()
     dest = Path(a.dir).expanduser().resolve()
@@ -178,8 +205,9 @@ def main():
         sys.exit("Python 3.9 or newer is required.")
     print(f"Installing Workflow Map to {dest}")
     dest.mkdir(parents=True, exist_ok=True)
-    for fn in ("build-map.py", "render_v3.py", "search_index.py", "search-server.py", "README.md"):
-        shutil.copy2(HERE / fn, dest / fn)
+    for fn in ("build-map.py", "render_v3.py", "search_index.py", "search-server.py", "README.md", "open-map.pyw", "workflow-map.ico"):
+        if (HERE / fn).exists():
+            shutil.copy2(HERE / fn, dest / fn)
     write_config(dest, Path(a.root).expanduser().resolve())
     cfg_path = dest / "config.json"
     cfg = json.load(open(cfg_path, encoding="utf-8"))
@@ -202,6 +230,8 @@ def main():
         install_skill()
     if not a.no_hook:
         add_hook(dest / "build-map.py")
+    if a.shortcut:
+        make_shortcuts(dest)
     if a.keep_transcripts:
         keep_transcripts()
     print("  building the first map (the first run scans every transcript once; later runs take under a second)...")

@@ -40,6 +40,7 @@ python install.py --dir "D:\Maps\mine"     # install elsewhere
 python install.py --root ~/code            # your projects live under a folder other than home
 python install.py --no-hook                # build on demand only
 python install.py --uninstall              # remove the hook and skill
+python install.py --shortcut               # Windows: "Workflow Map" on the Desktop and in Start, opens like an app
 python install.py --machine Laptop --publish-to <synced folder> --merge-from <synced folder>\OtherPC   # several computers, one map
 ```
 
@@ -68,6 +69,10 @@ Every rebuild updates `history/ledger.json`: one entry per session ever seen, wi
 Set `"backup_transcripts": true` to also keep a copy of every transcript under `history/transcripts/`, refreshed when the original changes. Budget roughly the size of `~/.claude/projects` (often a gigabyte or two). The first run copies everything; later runs copy only what changed.
 
 Claude Code deletes terminal transcripts after 30 days by default. `python install.py --keep-transcripts` raises that to ten years by setting `cleanupPeriodDays` in your Claude settings.
+
+## Open it like an app
+
+`python install.py --shortcut` (Windows) puts a "Workflow Map" shortcut on the Desktop and in the Start Menu. It runs `open-map.pyw`, which starts the local server if it is not running and opens the map in a chromeless Chrome or Edge window, no tabs or address bar, with its own icon. Pin it to the taskbar from the running window. On other systems run `python open-map.pyw` yourself.
 
 ## Glance: the sidebar, with what the sidebar cannot show
 
@@ -167,6 +172,7 @@ A second line is about the session itself: which account it was started on and w
 | File | |
 |---|---|
 | `00-WORKFLOW-MAP.html` | The map. Open in a browser. An app with six views (Glance, Home, Projects, Sessions, Assets, Automations) and a search box that reaches inside conversations. Dark and light themes, works on a phone. Press `/` to search. |
+| `open-map.pyw`, `workflow-map.ico` | The app launcher and its icon (see "Open it like an app"). |
 | `render_v3.py` | The page renderer. `build-map.py` gathers, this draws. |
 | `00-WORKFLOW-MAP.md` | Same content as Markdown, for Claude to read at the start of a session. |
 | `build-map.py` | The builder. `python build-map.py --verbose` rebuilds by hand. |
