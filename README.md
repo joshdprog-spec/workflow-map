@@ -68,6 +68,14 @@ Set `"backup_transcripts": true` to also keep a copy of every transcript under `
 
 Claude Code deletes terminal transcripts after 30 days by default. `python install.py --keep-transcripts` raises that to ten years by setting `cleanupPeriodDays` in your Claude settings.
 
+## Assets that live per account
+
+Three sections read what each Claude account holds on this machine, so you can see across accounts in one place:
+
+- **Claude Projects**: the claude.ai kind, with name, description and knowledge docs, from each account's project cache.
+- **Cowork deliverables**: the files each Claude-tab session produced, in its own output folder.
+- **Published artifacts**: pages on claude.ai, listed from the `artifacts` list in `config.json` (ask Claude to add this account's artifacts; a session can only list its own account's).
+
 ## Search everything, including inside conversations
 
 The search box at the top does three things at once:

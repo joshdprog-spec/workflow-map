@@ -46,6 +46,10 @@ When the user asks "where did we decide X", "which session talked about Y", or w
 
 It prints matching sessions, newest-best first, with snippets and the resume id. `--session <id>` prints one whole conversation (dialogue only). Quote a phrase to require it exactly.
 
+## Artifacts
+
+Published claude.ai pages belong to the account that published them, and there is no file on disk to mirror. The map lists them from the `artifacts` list in `config.json`: `{title, url, account, updated, project}`. When the user asks to add or refresh them, run the Artifact tool's `list` action (it shows this account's artifacts), merge any new ones into `config.json` with this account's email, and rebuild. Only a session on an account can list that account's artifacts, so ask the user to repeat the request from the other account if some are missing. A link the user shared from the artifact's Share menu opens from any account.
+
 ## Mirror and history
 
 - If the user has more than one Claude account on this machine and complains that sessions vanished after switching, set `"mirror_sessions": true` in `config.json`, rebuild, and tell them to sign out and back in once. Explain that the transcripts were never gone; only the sidebar is per account.

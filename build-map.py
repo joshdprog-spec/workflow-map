@@ -486,6 +486,56 @@ def ensure_search_server():
         return False
 
 
+# ---------- assets that live per account ----------
+JUNK = {"settings.local.json", ".package-lock.json", "package-lock.json", "concat.txt"}
+JUNK_DIRS = {"node_modules", "playwright", "playwright-core", "__pycache__", ".claude", ".git"}
+
+
+def load_claude_projects(accts):
+    """Claude Projects (the claude.ai kind, with a description and knowledge docs), from each account's project cache."""
+    out = []
+    for key, info in accts.items():
+        pc = COWORK_ROOT / key[0] / key[1] / ".project-cache"
+        if not pc.exists():
+            continue
+        for d in pc.iterdir():
+            meta = d / "metadata.json"
+            if not meta.exists():
+                continue
+            try:
+                m = json.load(open(meta, encoding="utf-8"))
+            except Exception:
+                continue
+            docs = sorted([f.name for f in (d / "docs").glob("*") if f.is_file()]) if (d / "docs").exists() else []
+            out.append({"name": m.get("name") or d.name, "description": (m.get("description") or "").strip(), "account": info["email"],
+                        "docs": docs, "synced": (m.get("synced_at") or "")[:10], "path": str(d)})
+    out.sort(key=lambda x: (x["account"], x["name"].lower()))
+    return out
+
+
+def load_cowork_outputs(cowork):
+    """Files each Cowork session produced, minus tooling noise."""
+    out = []
+    for c in cowork:
+        if not c.get("transcript"):
+            continue
+        odir = c["transcript"].parents[3] / "outputs"
+        if not odir.exists():
+            continue
+        files = []
+        for root, dirs, names in os.walk(odir):
+            dirs[:] = [x for x in dirs if x not in JUNK_DIRS]
+            for n in names:
+                if n in JUNK or n.startswith("."):
+                    continue
+                files.append(str(Path(root, n).relative_to(odir)))
+        if files:
+            files.sort()
+            out.append({"title": c["title"], "account": c["email"], "last": c["last"], "folders": c["folders"], "dir": str(odir), "files": files})
+    out.sort(key=lambda x: x["last"] or datetime.datetime.min, reverse=True)
+    return out
+
+
 # ---------- projects ----------
 def last_touched(folder, max_depth=2):
     best = 0
@@ -665,9 +715,12 @@ def build():
         tasks.append((tdir.name, desc, reg))
 
     cowork_list = sorted([c for c in cowork if not c["auto"]], key=lambda s: s["last"] or datetime.datetime.min, reverse=True)
+    claude_projects = load_claude_projects(accts)
+    cowork_outputs = load_cowork_outputs(cowork)
     return dict(accts=accts, current_key=current_key, current_info=current_info, rows=rows, tasks=tasks,
                 primary_email=primary_email, n_sessions=len(sessions), n_cowork=len(cowork), cowork=cowork_list,
-                mirrored=mirrored, ledger_n=ledger_n, search_up=search_up, search_port=int(CFG.get("search_port", 27183)))
+                mirrored=mirrored, ledger_n=ledger_n, search_up=search_up, search_port=int(CFG.get("search_port", 27183)),
+                claude_projects=claude_projects, cowork_outputs=cowork_outputs)
 
 
 # ---------- render ----------
@@ -752,6 +805,29 @@ def render_md(D):
                 A(f"| {name} | {desc} | {email} | {en} | {str(lr)[:16]} | {cwd} |")
         else:
             A(f"| {name} | {desc} | (not registered in any account) | | | |")
+
+    if D.get("claude_projects"):
+        A(f"\n## Claude Projects ({len(D['claude_projects'])})\n")
+        A("The claude.ai kind, with a description and knowledge docs. Each belongs to the account shown.\n")
+        A("| Project | Description | Docs | Account |")
+        A("|---|---|---|---|")
+        for x in D["claude_projects"]:
+            A(f"| **{x['name']}** | {html.escape(x['description'][:90])} | {len(x['docs'])}: {', '.join(x['docs'][:4])}{' ...' if len(x['docs']) > 4 else ''} | {x['account']} |")
+    if D.get("cowork_outputs"):
+        A(f"\n## Cowork deliverables ({len(D['cowork_outputs'])} sessions with files)\n")
+        A("| When | Session | Files | Folder | Account |")
+        A("|---|---|---|---|---|")
+        for o in D["cowork_outputs"]:
+            A(f"| {fmt(o['last'])} | {html.escape(o['title'][:50])} | {len(o['files'])}: {', '.join(o['files'][:3])}{' ...' if len(o['files']) > 3 else ''} | `{o['dir']}` | {o['account']} |")
+
+    arts = CFG.get("artifacts", [])
+    if arts:
+        A(f"\n## Published artifacts ({len(arts)})\n")
+        A("Artifacts belong to the account that published them. A shared link opens from any account.\n")
+        A("| Updated | Artifact | Project | Account |")
+        A("|---|---|---|---|")
+        for a in sorted(arts, key=lambda a: a.get("updated", ""), reverse=True):
+            A(f"| {a.get('updated', '')} | [{a['title']}]({a['url']}) | {a.get('project', '')} | {a.get('account', '')} |")
 
     A("\n## Global pieces (shared by every project and every account)\n")
     for label, path in CFG.get("global_pieces", []):
@@ -891,6 +967,49 @@ def render_html(D):
 
     renamed_html = "".join(f'<li><s>{E(r["name"])}</s> is now <b>{E(r["alias_to"])}</b></li>' for r in renamed)
 
+    # Claude Projects per account
+    projects_html = ""
+    if D.get("claude_projects"):
+        blocks = ""
+        for acct in sorted({x["account"] for x in D["claude_projects"]}):
+            items = [x for x in D["claude_projects"] if x["account"] == acct]
+            cards = "".join(
+                f'<article class="card mini"><h3>{E(x["name"])}</h3><p class="desc">{E(x["description"]) or "<span class=dim>no description</span>"}</p>'
+                + (f'<details><summary>Knowledge docs <span class="cnt">{len(x["docs"])}</span></summary><div class="files">' + "".join(f'<div class="file">{E(f)}</div>' for f in x["docs"]) + '</div></details>' if x["docs"] else '<div class="dim">no docs</div>')
+                + f'<div class="meta">{E(acct)}{(" · synced " + E(x["synced"])) if x["synced"] else ""}</div></article>'
+                for x in items)
+            blocks += f'<div class="acct-block"><div class="lbl">{E(acct)} <span class="cnt">{len(items)}</span></div><div class="grid">{cards}</div></div>'
+        projects_html = (f'<section><h2>Claude Projects <small>{len(D["claude_projects"])} on claude.ai, with their knowledge docs. Each belongs to the account shown and opens there.</small></h2>{blocks}</section>')
+
+    # Cowork deliverables per account
+    outputs_html = ""
+    if D.get("cowork_outputs"):
+        rows = ""
+        for o in D["cowork_outputs"]:
+            shown = o["files"][:8]
+            more = f'<div class="dim">and {len(o["files"]) - 8} more</div>' if len(o["files"]) > 8 else ""
+            rows += (f'<article class="card mini"><div class="card-top"><span class="ago">{E(ago(o["last"]))}</span><span class="path" title="{E(o["dir"])}">{E(o["dir"])}</span></div>'
+                     f'<h3>{E(o["title"]) or "(untitled)"}</h3><div class="meta">{E(o["account"])}{(" · " + E(", ".join(o["folders"]))) if o["folders"] else ""} · {len(o["files"])} files</div>'
+                     f'<div class="files">' + "".join(f'<div class="file">{E(f)}</div>' for f in shown) + f'</div>{more}</article>')
+        outputs_html = (f'<section><h2>Cowork deliverables <small>files produced by Claude-tab sessions, in each session\'s own output folder</small></h2><div class="grid">{rows}</div></section>')
+
+    arts = CFG.get("artifacts", [])
+    by_acct = {}
+    for a in arts:
+        by_acct.setdefault(a.get("account", "?"), []).append(a)
+    artifacts_html = ""
+    if arts:
+        blocks = ""
+        for acct, items in by_acct.items():
+            items = sorted(items, key=lambda a: a.get("updated", ""), reverse=True)
+            rows = "".join(
+                f'<li><span class="when">{E(a.get("updated", ""))}</span><span class="what"><a href="{E(a["url"])}" target="_blank">{E(a["title"])}</a>'
+                f'{(" <span class=dim>" + E(a["project"]) + "</span>") if a.get("project") else ""}</span><span class="act"><span class="dim">{E(acct)}</span></span></li>'
+                for a in items)
+            blocks += f'<div class="acct-block"><div class="lbl">{E(acct)} <span class="cnt">{len(items)}</span></div><ul class="plain">{rows}</ul></div>'
+        artifacts_html = (f'<section><h2>Published artifacts <small>{len(arts)} pages on claude.ai. They belong to the account that published them; '
+                          f'a shared link opens from any account.</small></h2>{blocks}</section>')
+
     # full ledger for search: every session ever seen, compact
     ledger_rows = []
     try:
@@ -927,6 +1046,7 @@ def render_html(D):
             f'{sections}'
             f'<section><h2>Claude-tab sessions with no project folder <small>{len(loose)}</small></h2><ul class="plain">{loose_html or "<li class=dim>none</li>"}</ul></section>'
             f'<section><h2>Automations <small>only run on the account they belong to</small></h2><ul class="plain">{task_html}</ul></section>'
+            f'{projects_html}{outputs_html}{artifacts_html}'
             f'<section><h2>Renamed folders</h2><ul class="plain simple">{renamed_html or "<li class=dim>none on record</li>"}</ul></section>'
             f'<section><h2>Shared by every project</h2><ul class="plain">{globals_html}</ul></section>'
             f'<p class="foot">This page is <code>{E(str(CFG.get("output_html", HERE / "00-WORKFLOW-MAP.html")))}</code>. The builder and its config live in <code>{E(str(HERE))}</code>. '
@@ -1005,6 +1125,7 @@ details[open] summary::before{transform:rotate(90deg)}
 .pill{display:inline-block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;padding:2px 9px;border-radius:999px;background:var(--code-bg);min-width:44px;text-align:center}
 .pill.on{background:var(--ok-bg);color:var(--ok-ink)}.pill.off{background:var(--bad-bg);color:var(--bad-ink)}
 .foot{color:var(--mute);font-size:13px;margin-top:40px;border-top:1px solid var(--line);padding-top:12px;max-width:80ch}
+.acct-block{margin-bottom:12px}.acct-block .lbl{margin-bottom:6px}.card.mini{gap:6px}.card.mini h3{font-size:19px}.files{margin-top:4px}.plain a{color:var(--acc);text-decoration:none}.plain a:hover{text-decoration:underline}
 .hits{background:var(--surface);border:1px solid var(--acc);border-radius:12px;padding:12px 16px;margin:6px 0 4px}
 .hits-head{font-weight:600;margin-bottom:6px}.hits .sess-list li{grid-template-columns:auto 1fr auto auto}
 .hits .f{color:var(--mute);font-size:12.5px;white-space:nowrap}
