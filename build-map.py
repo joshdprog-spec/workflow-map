@@ -114,11 +114,19 @@ def is_automation(title):
     return any(p in t for p in AUTOMATION)
 
 
+_MIRRORED = None
+
+
 def mirrored_paths():
-    try:
-        return set(json.load(open(HERE / "mirror-manifest.json", encoding="utf-8")).get("written", []))
-    except Exception:
-        return set()
+    """Paths of sidebar records this tool mirrored (read once per run)."""
+    global _MIRRORED
+    if _MIRRORED is None:
+        try:
+            with open(HERE / "mirror-manifest.json", encoding="utf-8") as fh:
+                _MIRRORED = set(json.load(fh).get("written", []))
+        except Exception:
+            _MIRRORED = set()
+    return _MIRRORED
 
 
 def load_index_sessions(accts):
@@ -792,6 +800,21 @@ def render_html(D):
             task_html += f'<li><span class="pill off">none</span><span class="what"><b>{E(name)}</b> <span class="dim">{E(desc[:90])}</span></span><span class="act dim">not registered</span></li>'
 
     renamed_html = "".join(f'<li><s>{E(r["name"])}</s> is now <b>{E(r["alias_to"])}</b></li>' for r in renamed)
+
+    # full ledger for search: every session ever seen, compact
+    ledger_rows = []
+    try:
+        L = json.load(open(HERE / "history" / "ledger.json", encoding="utf-8"))
+        for sid, e in L.items():
+            folder = os.path.basename(e.get("cwd", "")) if e.get("cwd") else ", ".join(e.get("folders", [])[:3])
+            if not folder and e.get("project_slug"):
+                folder = e["project_slug"].split("-")[-1]
+            ledger_rows.append({"id": sid, "t": e.get("title", ""), "d": (e.get("last_activity") or "")[:16].replace("T", " "),
+                                "f": folder, "a": ", ".join(e.get("accounts", [])), "k": e.get("kind", ""), "r": e.get("kind") in ("code", "terminal")})
+        ledger_rows.sort(key=lambda r: r["d"], reverse=True)
+    except Exception:
+        pass
+    ledger_json = json.dumps(ledger_rows, ensure_ascii=False).replace("</", "<\\/")
     globals_html = "".join(f'<li><span class="what"><b>{E(l)}</b></span><code>{E(p)}</code></li>' for l, p in CFG.get("global_pieces", []))
 
     css = CSS_V2
@@ -806,7 +829,9 @@ def render_html(D):
             f'<p class="sub">Updated {stamp}. Rebuilds itself whenever a Claude session starts or ends. Each card says what the project is, which file to read first, and the session to resume. '
             f'"Copy resume command" puts a terminal command on your clipboard that reopens that exact session in that folder.</p>'
             f'{banner}<div class="accts">{acct_cards}</div>'
-            f'<div class="toolbar"><input id="q" type="search" placeholder="Find a project or session, e.g. valorant, priced in, medkit" aria-label="Search projects"></div>'
+            f'<div class="toolbar"><input id="q" type="search" placeholder="Search every project and every session ever, e.g. valorant, priced in, medkit, august" aria-label="Search projects and sessions"></div>'
+            f'<div id="hits" class="hits" hidden><div class="hits-head"><span id="hits-n"></span> <span class="dim">matching sessions in the full history. Newest first.</span></div><ul id="hits-list" class="sess-list"></ul></div>'
+            f'<script id="ledger" type="application/json">{ledger_json}</script>'
             f'{sections}'
             f'<section><h2>Claude-tab sessions with no project folder <small>{len(loose)}</small></h2><ul class="plain">{loose_html or "<li class=dim>none</li>"}</ul></section>'
             f'<section><h2>Automations <small>only run on the account they belong to</small></h2><ul class="plain">{task_html}</ul></section>'
@@ -888,6 +913,9 @@ details[open] summary::before{transform:rotate(90deg)}
 .pill{display:inline-block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;padding:2px 9px;border-radius:999px;background:var(--code-bg);min-width:44px;text-align:center}
 .pill.on{background:var(--ok-bg);color:var(--ok-ink)}.pill.off{background:var(--bad-bg);color:var(--bad-ink)}
 .foot{color:var(--mute);font-size:13px;margin-top:40px;border-top:1px solid var(--line);padding-top:12px;max-width:80ch}
+.hits{background:var(--surface);border:1px solid var(--acc);border-radius:12px;padding:12px 16px;margin:6px 0 4px}
+.hits-head{font-weight:600;margin-bottom:6px}.hits .sess-list li{grid-template-columns:auto 1fr auto auto}
+.hits .f{color:var(--mute);font-size:12.5px;white-space:nowrap}
 code{font-family:"JetBrains Mono",Consolas,monospace;font-size:12.5px;background:var(--code-bg);padding:1px 5px;border-radius:4px}
 s{color:var(--mute)}
 @media(max-width:700px){h1{font-size:32px}.banner{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.sess-list li,.plain li{grid-template-columns:1fr;gap:2px}.act{white-space:normal}}
@@ -896,7 +924,18 @@ s{color:var(--mute)}
 
 JS_V2 = """
 document.querySelectorAll('.copy').forEach(function(b){b.addEventListener('click',async function(){try{await navigator.clipboard.writeText(b.dataset.copy);b.classList.add('done');var t=b.textContent;b.textContent='Copied';setTimeout(function(){b.classList.remove('done');b.textContent=t},1400)}catch(e){prompt('Copy this:',b.dataset.copy)}})});
-var q=document.getElementById('q');q.addEventListener('input',function(){var v=q.value.trim().toLowerCase();document.querySelectorAll('.card').forEach(function(c){c.classList.toggle('hide',!!v&&c.dataset.search.indexOf(v)<0)});document.querySelectorAll('section').forEach(function(s){if(!s.querySelector('.card'))return;var any=Array.prototype.some.call(s.querySelectorAll('.card'),function(c){return !c.classList.contains('hide')});s.style.display=any?'':'none'})});
+var LEDGER=[];try{LEDGER=JSON.parse(document.getElementById('ledger').textContent)}catch(e){}
+function esc(t){return String(t).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+var q=document.getElementById('q'),hits=document.getElementById('hits'),hl=document.getElementById('hits-list'),hn=document.getElementById('hits-n');
+function wire(){hl.querySelectorAll('.copy').forEach(function(b){b.onclick=async function(){try{await navigator.clipboard.writeText(b.dataset.copy);b.classList.add('done');var t=b.textContent;b.textContent='Copied';setTimeout(function(){b.classList.remove('done');b.textContent=t},1400)}catch(e){prompt('Copy this:',b.dataset.copy)}}})}
+q.addEventListener('input',function(){var v=q.value.trim().toLowerCase();
+document.querySelectorAll('.card').forEach(function(c){c.classList.toggle('hide',!!v&&c.dataset.search.indexOf(v)<0)});
+document.querySelectorAll('section').forEach(function(s){if(!s.querySelector('.card'))return;var any=Array.prototype.some.call(s.querySelectorAll('.card'),function(c){return !c.classList.contains('hide')});s.style.display=any?'':'none'});
+if(!v){hits.hidden=true;return}
+var words=v.split(/\\s+/),m=LEDGER.filter(function(r){var h=(r.t+' '+r.f+' '+r.a+' '+r.d+' '+r.k).toLowerCase();return words.every(function(w){return h.indexOf(w)>=0})});
+hn.textContent=m.length;hits.hidden=false;
+hl.innerHTML=m.slice(0,60).map(function(r){var k=r.k==='cowork'?'<span class="k k-cw">Claude tab</span>':(r.k==='terminal'?'<span class="k k-from">terminal</span>':'');var c=r.r&&r.id.length>20?'<button class="copy" data-copy="claude --resume '+esc(r.id)+'">copy resume</button>':'';return '<li><span class="when">'+esc(r.d||'')+'</span><span class="what">'+k+esc(r.t||'(untitled)')+'</span><span class="f">'+esc(r.f||'')+'</span><span class="act">'+c+'<span class="dim">'+esc(r.a||'')+'</span></span></li>'}).join('')+(m.length>60?'<li class="dim">and '+(m.length-60)+' more. Narrow the search.</li>':'');
+wire()});
 """
 
 

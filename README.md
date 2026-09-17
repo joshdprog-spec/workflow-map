@@ -68,6 +68,10 @@ Set `"backup_transcripts": true` to also keep a copy of every transcript under `
 
 Claude Code deletes terminal transcripts after 30 days by default. `python install.py --keep-transcripts` raises that to ten years by setting `cleanupPeriodDays` in your Claude settings.
 
+## Search everything
+
+The search box at the top filters the project cards and, at the same time, searches the full history ledger: every session ever seen, by title, folder, account, date or kind. Results list newest first with a copy-resume button where a session can be resumed.
+
 ## The session-start line
 
 The SessionStart hook prints one line into every new Claude session: how many projects and sessions exist, which account the app is on, whether anything is hidden, the most recently touched projects, and where the full map is. So any session you open already knows the state of your work before you say a word.
