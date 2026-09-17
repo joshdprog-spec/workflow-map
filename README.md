@@ -132,6 +132,8 @@ At every rebuild each machine drops its ledger, search index, products, assets a
 
 The SessionStart hook prints one line into every new Claude session: how many projects and sessions exist, which account the app is on, whether anything is hidden, the most recently touched projects, and where the full map is. So any session you open already knows the state of your work before you say a word.
 
+A second line is about the session itself: which account it was started on and when, which account the app is on now (and, if they differ, that replies spend the current account's limits and that the session must not be open from both at once), which claude.ai connectors the session was started with, and which connectors this account has today that the session lacks. The desktop app freezes a session's connector list when the session is created; a connector added later never appears in older sessions, so the line tells you to start a new session if you need one. Both facts come from the app's own session records.
+
 ## config.json
 
 | Key | What it does |

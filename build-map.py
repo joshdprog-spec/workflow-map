@@ -34,18 +34,21 @@ NOW = datetime.datetime.now()
 VERBOSE = "--verbose" in sys.argv
 UNMIRROR = "--unmirror" in sys.argv
 HOOK_EVENT = ""
+HOOK = {}
 
 
 def _read_hook_event():
     """Claude Code pipes a JSON event on stdin when this runs as a hook. Anywhere else stdin may be a pipe that
     never closes, so read it in a thread and give up after two seconds."""
-    global HOOK_EVENT
+    global HOOK_EVENT, HOOK
     import threading
     box = {}
 
     def reader():
         try:
-            box["v"] = json.loads(sys.stdin.read() or "{}").get("hook_event_name", "")
+            ev = json.loads(sys.stdin.read() or "{}")
+            box["ev"] = ev if isinstance(ev, dict) else {}
+            box["v"] = box["ev"].get("hook_event_name", "")
         except Exception:
             box["v"] = ""
     try:
@@ -57,6 +60,7 @@ def _read_hook_event():
     t.start()
     t.join(2.0)
     HOOK_EVENT = box.get("v", "")
+    HOOK = box.get("ev", {}) or {}
 
 
 _read_hook_event()
@@ -169,6 +173,7 @@ def load_index_sessions(accts):
                 "cwd": d.get("cwd") or "", "title": (d.get("title") or "").removeprefix(CFG.get("mirror_label", "\u21c4 ")), "cli": d.get("cliSessionId") or "",
                 "last": ts(d.get("lastActivityAt")), "archived": bool(d.get("isArchived")),
                 "email": info["email"], "acct": key, "auto": is_automation(d.get("title")),
+                "created": ts(d.get("createdAt")), "connectors": sorted({(s.get("name") or "") for s in (d.get("remoteMcpServersConfig") or []) if s.get("name")}),
             })
     return out
 
@@ -1033,7 +1038,8 @@ def build():
     return dict(accts=accts, current_key=current_key, current_info=current_info, rows=rows, tasks=tasks,
                 primary_email=primary_email, n_sessions=len(sessions), n_cowork=len(cowork), cowork=cowork_list,
                 mirrored=mirrored, ledger_n=ledger_n, search_up=search_up, search_port=int(CFG.get("search_port", 27183)),
-                claude_projects=claude_projects, cowork_outputs=cowork_outputs, products=products, machines=machines, machine=MACHINE, thumbs=thumbs)
+                claude_projects=claude_projects, cowork_outputs=cowork_outputs, products=products, machines=machines, machine=MACHINE, thumbs=thumbs,
+                sessions=sessions)
 
 
 # ---------- render ----------
@@ -1159,6 +1165,70 @@ def render_html(D):
     return render_v3.render_html(D, CFG, HERE, NOW, ROOT)
 
 
+def _norm_conn(names):
+    """Connector names as the app shows them, case-folded so 'vidIQ' and 'VidIQ' (two installs of one connector) count once."""
+    seen = {}
+    for n in names:
+        seen.setdefault(n.lower(), n)
+    return seen
+
+
+def session_start_line(D):
+    """Which account this session was born on, which one the app is on now, and connectors then versus now."""
+    sid = HOOK.get("session_id") or ""
+    cur = D.get("current_info") or {}
+    cur_email = cur.get("email") or "?"
+    src = HOOK.get("source") or ""
+    sessions = [s for s in D.get("sessions", []) if s.get("kind", "code") == "code"]
+    mine = [s for s in sessions if s.get("cli") == sid]
+    origin = min(mine, key=lambda s: s.get("created") or datetime.datetime.max) if mine else None
+    # what this account runs new sessions with today: the freshest few records it created
+    recent = sorted([s for s in sessions if s.get("email") == cur_email and s.get("connectors")], key=lambda s: s.get("created") or datetime.datetime.min, reverse=True)[:5]
+    now_conn = _norm_conn(n for s in recent for n in s["connectors"])
+    # the record the app will use for this session on this account: the copy in the current account's folder if any
+    this_conn = None
+    idx = cur.get("index_dir")
+    if sid and idx:
+        for f in Path(idx).glob("local_*.json"):
+            try:
+                d = json.load(open(f, encoding="utf-8"))
+                if d.get("cliSessionId") == sid:
+                    this_conn = _norm_conn((s.get("name") or "") for s in (d.get("remoteMcpServersConfig") or []) if s.get("name"))
+                    break
+            except Exception:
+                continue
+    if this_conn is None and origin:
+        this_conn = _norm_conn(origin.get("connectors") or [])
+    parts = []
+    if origin:
+        born = origin.get("email") or "?"
+        folder = os.path.basename(origin.get("cwd") or "") or "no folder"
+        when = (origin.get("created") or origin.get("last"))
+        when = when.strftime("%Y-%m-%d") if when else "?"
+        what = {"resume": "Resumed", "startup": "Opened", "compact": "Continuing (context compacted)", "clear": "Cleared", "fork": "Forked"}.get(src, "Opened")
+        parts.append(f"{what} session \"{origin.get('title') or '(untitled)'}\" in {folder}, started {when} on {born}.")
+        if born == cur_email:
+            parts.append(f"App is on the same account ({cur_email}).")
+        else:
+            parts.append(f"App is now on {cur_email}: replies spend {cur_email}'s limits. Do not open this session from {born} at the same time.")
+    else:
+        parts.append(f"New session on {cur_email}.")
+    if this_conn:
+        parts.append("Connectors in this session: " + ", ".join(sorted(this_conn.values(), key=str.lower)) + ".")
+    if this_conn is None and now_conn:
+        parts.append("New sessions on this account get: " + ", ".join(sorted(now_conn.values(), key=str.lower)) + ".")
+    elif now_conn:
+        missing = [now_conn[k] for k in now_conn if k not in (this_conn or {})]
+        extra = [this_conn[k] for k in (this_conn or {}) if k not in now_conn]
+        if missing:
+            parts.append(f"This account now also has {', '.join(sorted(missing, key=str.lower))}, which this session was not started with; start a new session if you need them.")
+        if extra:
+            parts.append(f"This session lists {', '.join(sorted(extra, key=str.lower))}, which {cur_email} does not have; those tools will not work here.")
+        if not missing and not extra and this_conn:
+            parts.append("Same connectors as a new session on this account would get.")
+    return "Session: " + " ".join(parts)
+
+
 def main():
     try:
         D = build()
@@ -1172,6 +1242,10 @@ def main():
             recent = ", ".join(r["name"] for r in D["rows"][:4])
             state = "mirrored into every account's sidebar" if CFG.get("mirror_sessions") else (f"{hidden} sessions belong to {D['primary_email']} and are hidden from this account's sidebar" if hidden and cur != D["primary_email"] else "all visible")
             print(f"Workflow Map: {len(D['rows'])} projects, {D['n_sessions']} Code + {D['n_cowork']} Cowork sessions; app on {cur}; {state}. Most recent: {recent}. Full map: {CFG.get('output_md', HERE / '00-WORKFLOW-MAP.md')}")
+            try:
+                print(session_start_line(D))
+            except Exception as e:
+                print(f"Session: (could not work out this session's account: {e})")
         log(f"wrote {CFG.get('output_html', HERE / '00-WORKFLOW-MAP.html')}: {len(D['rows'])} projects, {D['n_sessions']} desktop sessions, {D['n_cowork']} cowork sessions")
     except Exception:
         (HERE / "last-run.log").write_text("ERROR " + NOW.isoformat() + "\n" + traceback.format_exc(), encoding="utf-8")
