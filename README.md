@@ -69,6 +69,10 @@ Set `"backup_transcripts": true` to also keep a copy of every transcript under `
 
 Claude Code deletes terminal transcripts after 30 days by default. `python install.py --keep-transcripts` raises that to ten years by setting `cleanupPeriodDays` in your Claude settings.
 
+## Glance: the sidebar, with what the sidebar cannot show
+
+The landing view. Every session grouped by folder like the desktop app's own sidebar, newest first, in dense columns so a whole history fits on one screen. Each row carries a colour dot for the account the session was born on, a `tab` mark for Claude-tab sessions (which must be opened from that account), an amber `!` when the session was started before a connector its account has today (hover to see which), and a click copies the resume command. Chips filter by account and by kind; automation runs are hidden until you ask for them. Folder headers link to the project's row.
+
 ## Things you are building
 
 The map finds products by their own files, not by folder name: a sales page, a ship kit or launch checklist, an offer or pricing file, a course, a bundle. Each becomes a card on Home named by the page's own title, with a stage (Ready to launch, Sales page built, Bundle built, Offer drafted, Course drafted) and buttons that open the page, the launch checklist, the offer or the course. Deploy copies, previews and archives are ignored.
@@ -162,7 +166,7 @@ A second line is about the session itself: which account it was started on and w
 
 | File | |
 |---|---|
-| `00-WORKFLOW-MAP.html` | The map. Open in a browser. An app with five views (Home, Projects, Sessions, Assets, Automations) and a search box that reaches inside conversations. Dark and light themes, works on a phone. Press `/` to search. |
+| `00-WORKFLOW-MAP.html` | The map. Open in a browser. An app with six views (Glance, Home, Projects, Sessions, Assets, Automations) and a search box that reaches inside conversations. Dark and light themes, works on a phone. Press `/` to search. |
 | `render_v3.py` | The page renderer. `build-map.py` gathers, this draws. |
 | `00-WORKFLOW-MAP.md` | Same content as Markdown, for Claude to read at the start of a session. |
 | `build-map.py` | The builder. `python build-map.py --verbose` rebuilds by hand. |

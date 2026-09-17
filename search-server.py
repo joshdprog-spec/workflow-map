@@ -7,7 +7,7 @@
 
 Listens on 127.0.0.1 only. Nothing leaves the machine.
 """
-import argparse, html, json, os, sys, urllib.parse
+import argparse, html, json, os, socket, sys, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -99,6 +99,26 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def _write(self, b):
+        """Write in flushed 256 KB pieces. One sendall() of a multi-megabyte body stalls and gets reset at 5 MiB on
+        Windows loopback (seen with the 2.4 map, 5 MB of baked-in thumbnails); pieces go through in milliseconds."""
+        for i in range(0, len(b), 262144):
+            self.wfile.write(b[i:i + 262144])
+        self.wfile.flush()
+
+    def finish(self):
+        """Half-close and wait for the client to finish reading before the socket goes away. Some clients (the Claude
+        desktop app's browser pane among them) report a reset on a multi-megabyte response if the server closes first."""
+        try:
+            self.wfile.flush()
+            self.connection.shutdown(socket.SHUT_WR)
+            self.connection.settimeout(15)
+            while self.connection.recv(65536):
+                pass
+        except Exception:
+            pass
+        super().finish()
+
     def _send(self, body, ctype="text/html; charset=utf-8", code=200):
         b = body.encode("utf-8")
         self.send_response(code)
@@ -106,8 +126,9 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(b)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(b)
+        self._write(b)
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
@@ -168,9 +189,9 @@ class H(BaseHTTPRequestHandler):
             if ext in (".html", ".htm"):
                 return self._send(fp.read_text(encoding="utf-8", errors="replace"))
             if ext == ".pdf":
-                b = fp.read_bytes(); self.send_response(200); self.send_header("Content-Type", "application/pdf"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
+                b = fp.read_bytes(); self.send_response(200); self.send_header("Content-Type", "application/pdf"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self._write(b); return
             if ext in (".png", ".jpg", ".jpeg", ".svg", ".gif"):
-                b = fp.read_bytes(); self.send_response(200); self.send_header("Content-Type", {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "svg": "image/svg+xml", "gif": "image/gif"}[ext[1:]]); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
+                b = fp.read_bytes(); self.send_response(200); self.send_header("Content-Type", {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "svg": "image/svg+xml", "gif": "image/gif"}[ext[1:]]); self.send_header("Content-Length", str(len(b))); self.end_headers(); self._write(b); return
             txt = fp.read_text(encoding="utf-8", errors="replace") if fp.stat().st_size < 4_000_000 else "(file too large to show)"
             return self._send(page(fp.name, f"<p><span class='dim'>{html.escape(str(fp))}</span></p><div class='turn assistant' style='font-family:Consolas,monospace;font-size:13px'>{html.escape(txt)}</div>"))
         if u.path == "/session":

@@ -67,6 +67,21 @@ def build_data(D, CFG, HERE, NOW, ROOT):
             "elsewhere": [_sess(s) for s in r["elsewhere"]], "n_work": r["n_work"], "n_cowork": r["n_cowork"], "n_elsewhere": r["n_elsewhere"],
             "n_mem": r["n_mem"], "n_auto": r["n_auto"], "arts": _match_arts(r["name"] + " " + (r["alias_to"] or ""), CFG.get("artifacts", [])),
             "thumb": _data_uri(D.get("thumbs", {}).get("projects", {}).get(r["name"], ""))})
+    # connectors: what each account's newest sessions were started with = what a new session gets today
+    _now = {}
+    _conn = {}
+    for s in D.get("sessions", []):
+        if s.get("cli"):
+            _conn[s["cli"]] = {c.lower(): c for c in (s.get("connectors") or [])}
+    for email in {s.get("email") for s in D.get("sessions", [])}:
+        fresh = sorted([s for s in D.get("sessions", []) if s.get("email") == email and s.get("connectors")],
+                       key=lambda s: s.get("created") or datetime.datetime.min, reverse=True)[:5]
+        acc = {}
+        for s in fresh:
+            for c in s["connectors"]:
+                acc.setdefault(c.lower(), c)
+        _now[email] = acc
+    _auto = [p.lower() for p in CFG.get("automation_title_patterns", [])]
     ledger = []
     try:
         L = json.load(open(HERE / "history" / "ledger.json", encoding="utf-8"))
@@ -74,8 +89,13 @@ def build_data(D, CFG, HERE, NOW, ROOT):
             folder = os.path.basename(e.get("cwd", "")) if e.get("cwd") else ", ".join(e.get("folders", [])[:3])
             if not folder and e.get("project_slug"):
                 folder = e["project_slug"].split("-")[-1]
+            born = e.get("account") or (e.get("accounts") or [""])[0]
+            have = _conn.get(sid)
+            miss = sorted([v for k, v in _now.get(born, {}).items() if k not in have], key=str.lower) if have is not None and e.get("kind") == "code" else []
+            t_ = (e.get("title") or "").lower()
             ledger.append({"id": sid, "t": e.get("title", ""), "d": (e.get("last_activity") or "")[:16], "f": folder, "a": ", ".join(e.get("accounts", [])),
-                           "k": e.get("kind", ""), "r": e.get("kind") in ("code", "terminal")})
+                           "k": e.get("kind", ""), "r": e.get("kind") in ("code", "terminal"), "b": born, "x": miss,
+                           "u": 1 if any(p in t_ for p in _auto) else 0})
         ledger.sort(key=lambda r: r["d"], reverse=True)
     except Exception:
         pass
@@ -146,6 +166,7 @@ SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name
 <div class="app">
   <nav class="rail" aria-label="Sections">
     <div class="brand"><span class="brand-mark"></span><span class="brand-name">Workflow Map</span></div>
+    <a href="#glance" data-view="glance"><span class="ico">&#9783;</span>Glance</a>
     <a href="#home" data-view="home"><span class="ico">&#9679;</span>Home</a>
     <a href="#projects" data-view="projects"><span class="ico">&#9638;</span>Projects</a>
     <a href="#sessions" data-view="sessions"><span class="ico">&#9776;</span>Sessions</a>
@@ -158,7 +179,8 @@ SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name
       <div class="search-wrap"><span class="search-ico">&#8981;</span><input id="q" type="search" placeholder="Search projects, sessions, and inside every conversation" aria-label="Search" autocomplete="off"><kbd>/</kbd></div>
       <div id="acct-pill" class="pill"></div>
     </header>
-    <section id="view-home" class="view"></section>
+    <section id="view-glance" class="view"></section>
+    <section id="view-home" class="view" hidden></section>
     <section id="view-projects" class="view" hidden></section>
     <section id="view-sessions" class="view" hidden></section>
     <section id="view-assets" class="view" hidden></section>
@@ -223,6 +245,25 @@ h1{font-size:26px;font-weight:700;margin:6px 0 4px;letter-spacing:-.01em}h2{font
 .btn{font:600 12.5px "Manrope",sans-serif;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);padding:7px 11px;border-radius:8px;cursor:pointer;white-space:nowrap}
 .btn:hover{border-color:var(--acc)}.btn.primary{background:var(--acc);color:var(--acc-ink);border-color:transparent}.btn.done{background:var(--ok-bg);color:var(--ok);border-color:transparent}
 .btn:focus-visible,.row:focus-visible,.rail a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.glance{column-width:290px;column-gap:20px}
+.gf{break-inside:avoid;margin:0 0 14px;padding:6px 0 4px;border-top:1px solid var(--line)}
+.gf h3{display:flex;align-items:center;gap:8px;margin:0 0 4px;padding:4px 6px;font-family:"Sora",sans-serif;font-size:13px;font-weight:600;color:var(--ink)}
+.gf h3 .n{color:var(--mute);font-weight:500;font-size:12px}
+.gf h3 .g{margin-left:auto;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+.gf h3 a{color:inherit;text-decoration:none}
+.gr{display:flex;align-items:center;gap:7px;padding:3px 6px;border-radius:6px;font-size:12.5px;line-height:1.35;color:var(--ink-2);cursor:pointer;position:relative}
+.gr:hover{background:var(--sel);color:var(--ink)}
+.gr.copied::after{content:"copied";position:absolute;right:6px;top:2px;font-size:10.5px;font-weight:600;color:var(--ok);background:var(--surface);padding:1px 6px;border-radius:999px}
+.gr .t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gr .d{color:var(--mute);font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.gr .cwm{font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--acc-2)}
+.gr .x{color:var(--warn);font-weight:700;font-size:12px}
+.gr.au{opacity:.6}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.gmore{display:block;padding:2px 6px;font-size:11.5px;color:var(--mute);cursor:pointer}
+.gmore:hover{color:var(--ink)}
+.glegend{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;margin:0 0 10px;font-size:12px;color:var(--ink-2)}
+.glegend .cur{font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--acc);margin-left:4px}
 .day{font-family:"Sora",sans-serif;font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--mute);margin:18px 0 6px}
 .srow{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:9px 12px;background:var(--surface);border:1px solid var(--line);border-radius:10px;margin-bottom:6px;font-size:13.5px}
 .srow .when{color:var(--mute);font-size:12px;min-width:44px;font-variant-numeric:tabular-nums}.srow .what{min-width:0}.srow .what b{font-weight:600}.srow .f{color:var(--mute);font-size:12.5px;margin-left:8px}
@@ -363,13 +404,37 @@ if(deepOK===false){deep.innerHTML='<div class="dim">Search server is not running
 fetch('http://127.0.0.1:'+M.port+'/search?q='+encodeURIComponent(v0),{mode:'cors'}).then(function(r){return r.json()}).then(function(all){var res=all.conversations||[],files=all.files||[];deepOK=true;dn.textContent=res.length;fn.textContent=files.length;
 fl.innerHTML=files.length?files.slice(0,25).map(function(f){return '<div class="frow"><div><div class="n">'+mchip(f.machine)+(f.machine?esc(f.name||f.path.split(/[\\/]/).pop()):'<a href="http://127.0.0.1:'+M.port+'/file?path='+encodeURIComponent(f.path)+'" target="_blank">'+esc(f.name)+'</a>')+(f.title?' <span class="t">'+esc(f.title)+'</span>':'')+'</div>'+(f.snippet?'<div class="t">'+f.snippet+'</div>':'')+'<div class="p">'+esc(f.rel)+'</div></div><div class="dim" style="font-size:12px;white-space:nowrap">'+esc(f.project)+'</div></div>'}).join(''):'<div class="dim">No file matches.</div>';
 deep.innerHTML=res.length?res.map(function(g){return '<div class="hit"><h3>'+(g.machine?esc(g.title):'<a href="http://127.0.0.1:'+M.port+'/session?id='+encodeURIComponent(g.session)+'" target="_blank">'+esc(g.title)+'</a>')+'</h3><div class="meta">'+kchip(g.kind)+mchip(g.machine)+'<span>'+esc((g.last_ts||'').slice(0,16))+'</span><span>'+esc(g.folder||'')+'</span><span>'+esc(g.account||'')+'</span><span>'+g.hits+' matching messages</span>'+((g.kind==='code'||g.kind==='terminal')?copyBtn('claude --resume '+g.session):'')+'</div>'+g.snippets.map(function(s){return '<div class="snip"><span class="r">'+esc(s.role)+'</span>'+s.html+'</div>'}).join('')+'</div>'}).join(''):'<div class="dim">No conversation contains that.</div>';wireCopy(deep)}).catch(function(){deepOK=false;deep.innerHTML='<div class="dim">Conversation search is not reachable right now.</div>';dn.textContent='off'})}
-q.addEventListener('input',function(){var v0=q.value.trim();clearTimeout(deepT);if(!v0){if(location.hash==='#search')location.hash='#home';return}deepT=setTimeout(function(){lastQ=v0;if(location.hash!=='#search'){history.replaceState(null,'','#search')}show('search');renderSearch(v0)},220)});
-document.addEventListener('keydown',function(e){if(e.key==='/'&&document.activeElement!==q){e.preventDefault();q.focus()}if(e.key==='Escape'&&document.activeElement===q){q.value='';q.blur();location.hash='#home'}});
+q.addEventListener('input',function(){var v0=q.value.trim();clearTimeout(deepT);if(!v0){if(location.hash==='#search')location.hash='#glance';return}deepT=setTimeout(function(){lastQ=v0;if(location.hash!=='#search'){history.replaceState(null,'','#search')}show('search');renderSearch(v0)},220)});
+document.addEventListener('keydown',function(e){if(e.key==='/'&&document.activeElement!==q){e.preventDefault();q.focus()}if(e.key==='Escape'&&document.activeElement===q){q.value='';q.blur();location.hash='#glance'}});
 
 /* ---------- router ---------- */
 var views={home:renderHome,projects:renderProjects,sessions:renderSessions,assets:renderAssets,automations:renderAutomations};
+/* ---------- GLANCE ---------- */
+var gFilter={a:'All',k:'All',auto:false};var gOpen={};
+var DOTS=['#7F77DD','#1D9E75','#D85A30','#378ADD','#D4537E','#888780'];
+function dotColor(email){var all=D.accounts.map(function(a){return a.email}).filter(function(e){return e&&e!=='(unknown account)'}).sort();var i=all.indexOf(email);if(email==='(unknown account)'||email==='terminal'||!email)return '#888780';return DOTS[(i<0?all.length:i)%DOTS.length]}
+function dot(email,title){return '<span class="dot" style="background:'+dotColor(email)+'" title="'+esc(title||email)+'"></span>'}
+function renderGlance(){var v=document.getElementById('view-glance');
+var accts=['All'].concat(D.accounts.map(function(a){return a.email}).filter(function(e){return e!=='(unknown account)'}));var kinds=['All','code','cowork'];var kl={All:'Everything',code:'Code only',cowork:'Claude tab only'};
+var chips='<div class="chips">'+accts.map(function(a){return '<span class="chip'+(a===gFilter.a?' on':'')+'" data-ga="'+esc(a)+'">'+esc(a==='All'?'Both accounts':a.split('@')[0])+'</span>'}).join('')+'</div><div class="chips">'+kinds.map(function(k){return '<span class="chip'+(k===gFilter.k?' on':'')+'" data-gk="'+k+'">'+kl[k]+'</span>'}).join('')+'<span class="chip'+(gFilter.auto?' on':'')+'" data-gauto="1">Automation runs</span></div>';
+var legend='<div class="glegend">'+D.accounts.filter(function(a){return a.email!=='(unknown account)'}).map(function(a){return '<span>'+dot(a.email)+' '+esc(a.email.split('@')[0])+(a.current?'<span class="cur">app is here</span>':'')+'</span>'}).join('')+'<span>'+dot('(unknown account)')+' other</span><span><span class="x">!</span> started before a connector this account has now</span><span class="dim">click a row to copy its resume command</span></div>';
+var rows=D.ledger.filter(function(s){if(s.k==='terminal')return false;if(!gFilter.auto&&s.u)return false;if(gFilter.k!=='All'&&s.k!==gFilter.k)return false;if(gFilter.a!=='All'&&(s.b||s.a||'').indexOf(gFilter.a)<0)return false;return true});
+var by={},order=[];rows.forEach(function(s){var f=s.f||'(no folder)';if(/^scratch-\d{4}-/.test(f))f='(scratch workspaces)';else if(f.indexOf(', ')>0)f=f.split(', ')[0];if(!by[f]){by[f]=[];order.push(f)}by[f].push(s)});
+var pg={};D.projects.forEach(function(p){pg[p.name]=p.group});
+var out=order.map(function(f){var list=by[f];var open=gOpen[f];var shown=open?list:list.slice(0,6);var pname=D.projects.some(function(p){return p.name===f})?f:'';
+var head='<h3>'+dot(list[0].b||list[0].a)+(pname?'<a href="#projects/'+encodeURIComponent(pname)+'">'+esc(f)+'</a>':esc(f))+'<span class="n">'+list.length+' · '+esc(ago(list[0].d))+'</span>'+(pg[f]&&pg[f]!=='Other'?'<span class="g">'+esc(pg[f])+'</span>':'')+'</h3>';
+var body=shown.map(function(s){var acct=s.b||(s.a||'').split(', ')[0];var cmd=s.k==='code'&&s.id.length>20?'claude --resume '+s.id:'';
+return '<div class="gr'+(s.u?' au':'')+'" '+(cmd?'data-gcopy="'+esc(cmd)+'"':'')+' title="'+esc((s.t||'(untitled)')+' · '+acct+(s.k==='cowork'?' · Claude tab (open from that account)':'')+(s.x&&s.x.length?' · missing: '+s.x.join(', '):''))+'">'+dot(acct)+'<span class="t">'+esc(s.t||'(untitled)')+'</span>'+(s.k==='cowork'?'<span class="cwm">tab</span>':'')+(s.x&&s.x.length?'<span class="x" title="'+esc('started without: '+s.x.join(', '))+'">!</span>':'')+(s.m?mchip(s.m):'')+'<span class="d">'+esc(ago(s.d).replace(' days ago','d').replace('yesterday','1d').replace('today','now'))+'</span></div>'}).join('');
+var more=list.length>shown.length?'<span class="gmore" data-gmore="'+esc(f)+'">+ '+(list.length-shown.length)+' more</span>':(open&&list.length>6?'<span class="gmore" data-gmore="'+esc(f)+'">show fewer</span>':'');
+return '<div class="gf">'+head+body+more+'</div>'}).join('');
+v.innerHTML='<h1>Glance</h1><p class="sub">Every session, grouped by folder like the app\'s sidebar, newest first. The dot is the account a session was born on; with the mirror on, any Code session opens from either account.</p>'+chips+legend+'<div class="glance">'+(out||'<div class="empty">Nothing matches.</div>')+'</div>';
+v.querySelectorAll('[data-ga]').forEach(function(c){c.addEventListener('click',function(){gFilter.a=c.dataset.ga;renderGlance()})});
+v.querySelectorAll('[data-gk]').forEach(function(c){c.addEventListener('click',function(){gFilter.k=c.dataset.gk;renderGlance()})});
+v.querySelectorAll('[data-gauto]').forEach(function(c){c.addEventListener('click',function(){gFilter.auto=!gFilter.auto;renderGlance()})});
+v.querySelectorAll('[data-gmore]').forEach(function(c){c.addEventListener('click',function(){gOpen[c.dataset.gmore]=!gOpen[c.dataset.gmore];renderGlance()})});
+v.querySelectorAll('[data-gcopy]').forEach(function(r){r.addEventListener('click',async function(){try{await navigator.clipboard.writeText(r.dataset.gcopy)}catch(e){}r.classList.add('copied');setTimeout(function(){r.classList.remove('copied')},1100)})})}
 function show(name){document.querySelectorAll('.view').forEach(function(s){s.hidden=s.id!=='view-'+name});document.querySelectorAll('.rail a').forEach(function(a){a.classList.toggle('on',a.dataset.view===name)});window.scrollTo(0,0)}
-function route(){var h=(location.hash||'#home').slice(1).split('/');var name=h[0]||'home';if(name==='projects'&&h[1]){pOpen=decodeURIComponent(h[1])}if(name==='search'){if(q.value.trim()){show('search');renderSearch(q.value.trim())}else{name='home'}}
+function route(){var h=(location.hash||'#glance').slice(1).split('/');var name=h[0]||'glance';if(name==='glance'){renderGlance();show('glance');return}if(name==='projects'&&h[1]){pOpen=decodeURIComponent(h[1])}if(name==='search'){if(q.value.trim()){show('search');renderSearch(q.value.trim())}else{name='home'}}
 if(views[name]){views[name]();show(name)}}
 window.addEventListener('hashchange',route);route();
 """
