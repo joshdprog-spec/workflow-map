@@ -144,7 +144,8 @@ def mirrored_paths():
     if _MIRRORED is None:
         try:
             with open(HERE / "mirror-manifest.json", encoding="utf-8") as fh:
-                _MIRRORED = set(json.load(fh).get("written", []))
+                w = json.load(fh).get("written", [])
+                _MIRRORED = set(w.keys() if isinstance(w, dict) else w)
         except Exception:
             _MIRRORED = set()
     return _MIRRORED
@@ -298,15 +299,17 @@ def mirror_sessions(accts):
     try:
         manifest = json.load(open(manifest_path, encoding="utf-8"))
     except Exception:
-        manifest = {"written": []}
+        manifest = {"written": {}}
+    if isinstance(manifest.get("written"), list):  # older manifest form
+        manifest["written"] = {w: 0 for w in manifest["written"]}
     if UNMIRROR:
         removed = 0
-        for w in manifest.get("written", []):
+        for w in list(manifest.get("written", {})):
             try:
                 Path(w).unlink(); removed += 1
             except Exception:
                 pass
-        manifest_path.write_text(json.dumps({"written": []}, indent=1), encoding="utf-8")
+        manifest_path.write_text(json.dumps({"written": {}}, indent=1), encoding="utf-8")
         log(f"unmirror: removed {removed} mirrored records")
         return 0
     if not CFG.get("mirror_sessions"):
@@ -333,23 +336,23 @@ def mirror_sessions(accts):
             m = f.stat().st_mtime
             if sid not in newest or m > newest[sid][0]:
                 newest[sid] = (m, f, rec)
-    written = set(manifest.get("written", []))
+    written = dict(manifest.get("written", {}))
     n = 0
     for sid, (m, src, rec) in newest.items():
         for d in dirs:
             dst = d / src.name
             if dst == src:
                 continue
-            if dst.exists() and dst.stat().st_mtime >= m:
-                continue
             if dst.exists() and str(dst) not in written:
-                continue  # the other account has its own, older, native copy; leave it alone
+                continue  # the other account has its own native copy; leave it alone
+            if str(dst) in written and written[str(dst)] >= m:
+                continue  # our copy is already from this version of the source
             try:
                 shutil.copy2(src, dst)
-                written.add(str(dst)); n += 1
+                written[str(dst)] = m; n += 1
             except Exception:
                 pass
-    manifest_path.write_text(json.dumps({"written": sorted(written)}, indent=1), encoding="utf-8")
+    manifest_path.write_text(json.dumps({"written": dict(sorted(written.items()))}, indent=1), encoding="utf-8")
     # label every mirrored copy so the sidebar shows which sessions come from another account
     marker = CFG.get("mirror_label", "\u21c4 ")
     labelled = 0
@@ -361,10 +364,8 @@ def mirror_sessions(accts):
                 t = rec.get("title") or ""
                 if t.startswith(marker):
                     continue
-                st = wp.stat()
                 rec["title"] = marker + t
                 wp.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
-                os.utime(wp, (st.st_atime, st.st_mtime))  # keep the copy's mtime so refresh detection still works
                 labelled += 1
             except Exception:
                 pass
