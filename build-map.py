@@ -165,7 +165,7 @@ def load_index_sessions(accts):
             if not isinstance(d, dict):
                 continue
             out.append({
-                "cwd": d.get("cwd") or "", "title": d.get("title") or "", "cli": d.get("cliSessionId") or "",
+                "cwd": d.get("cwd") or "", "title": (d.get("title") or "").removeprefix(CFG.get("mirror_label", "\u21c4 ")), "cli": d.get("cliSessionId") or "",
                 "last": ts(d.get("lastActivityAt")), "archived": bool(d.get("isArchived")),
                 "email": info["email"], "acct": key, "auto": is_automation(d.get("title")),
             })
@@ -350,7 +350,25 @@ def mirror_sessions(accts):
             except Exception:
                 pass
     manifest_path.write_text(json.dumps({"written": sorted(written)}, indent=1), encoding="utf-8")
-    log(f"mirror: {n} records copied this run, {len(written)} mirrored records in total")
+    # label every mirrored copy so the sidebar shows which sessions come from another account
+    marker = CFG.get("mirror_label", "\u21c4 ")
+    labelled = 0
+    if marker:
+        for w in written:
+            wp = Path(w)
+            try:
+                rec = json.loads(wp.read_text(encoding="utf-8"))
+                t = rec.get("title") or ""
+                if t.startswith(marker):
+                    continue
+                st = wp.stat()
+                rec["title"] = marker + t
+                wp.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+                os.utime(wp, (st.st_atime, st.st_mtime))  # keep the copy's mtime so refresh detection still works
+                labelled += 1
+            except Exception:
+                pass
+    log(f"mirror: {n} records copied this run, {len(written)} mirrored records in total, {labelled} newly labelled")
     return n
 
 
