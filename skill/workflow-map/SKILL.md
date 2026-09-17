@@ -38,6 +38,12 @@ and read the path out of the hook `args`. The default is `~/workflow-map`. Outpu
 
 Add `"OldName": "NewName"` to `aliases` in `config.json` and rebuild. Old sessions then show under the new name instead of as a missing folder.
 
+## Mirror and history
+
+- If the user has more than one Claude account on this machine and complains that sessions vanished after switching, set `"mirror_sessions": true` in `config.json`, rebuild, and tell them to sign out and back in once. Explain that the transcripts were never gone; only the sidebar is per account.
+- `history/ledger.json` lists every session ever seen, including ones the app no longer shows. Use it when the user asks about an old session that is missing from the map.
+- `python build-map.py --unmirror` removes every record the mirror wrote and nothing else.
+
 ## Rules
 
 - Never edit `00-WORKFLOW-MAP.md` or `.html` by hand. They are overwritten on the next rebuild. Edit `config.json`.

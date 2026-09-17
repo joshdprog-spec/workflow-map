@@ -13,7 +13,7 @@ Reads:
 Writes nothing to stdout unless --verbose (SessionStart hooks feed stdout to
 the model, so the default is silent). Errors go to last-run.log.
 """
-import json, os, re, sys, glob, datetime, traceback, html
+import json, os, re, sys, glob, datetime, traceback, html, shutil
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -32,6 +32,13 @@ SESS_ROOT = APPDATA / "claude-code-sessions"
 COWORK_ROOT = APPDATA / "local-agent-mode-sessions"
 NOW = datetime.datetime.now()
 VERBOSE = "--verbose" in sys.argv
+UNMIRROR = "--unmirror" in sys.argv
+HOOK_EVENT = ""
+if not sys.stdin.isatty():
+    try:
+        HOOK_EVENT = json.loads(sys.stdin.read() or "{}").get("hook_event_name", "")
+    except Exception:
+        HOOK_EVENT = ""
 STATE_PAT = re.compile(r"(HANDOFF|STATE|START-HERE|WHERE-WE-ARE|CONTINUITY|-CURRENT|BLUEPRINT|CLAUDE\.md|README\.md|AUDIT-)", re.I)
 SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv", "venv", "dist", "build", ".next", ".claude"}
 AUTOMATION = [p.lower() for p in CFG.get("automation_title_patterns", [])]
@@ -70,7 +77,7 @@ def load_accounts():
         for org_dir in acct_dir.iterdir():
             if not org_dir.is_dir():
                 continue
-            files = list(org_dir.glob("local_*.json"))
+            files = [f for f in org_dir.glob("local_*.json") if str(f) not in mirrored_paths()]
             if not files and not (org_dir / "scheduled-tasks.json").exists():
                 continue
             info = {"email": "?", "org_name": "?", "plan": "?", "index_dir": org_dir,
@@ -107,11 +114,21 @@ def is_automation(title):
     return any(p in t for p in AUTOMATION)
 
 
+def mirrored_paths():
+    try:
+        return set(json.load(open(HERE / "mirror-manifest.json", encoding="utf-8")).get("written", []))
+    except Exception:
+        return set()
+
+
 def load_index_sessions(accts):
-    """All desktop sessions from every account. Returns list of dicts."""
+    """All desktop sessions from every account, each counted once under the account that created it."""
     out = []
+    mirrored = mirrored_paths()
     for key, info in accts.items():
         for f in info["index_dir"].glob("local_*.json"):
+            if str(f) in mirrored:
+                continue
             try:
                 d = json.load(open(f, encoding="utf-8"))
             except Exception:
@@ -243,6 +260,144 @@ def scan_mentions(files, names):
     return result
 
 
+# ---------- mirror: make every account's sidebar show every session ----------
+def mirror_sessions(accts):
+    """Copy each session's newest record file into every account folder that lacks it (or has an older copy).
+    Transcripts are shared on disk, so a mirrored record opens normally from either account.
+    Skips archived and deleted sessions. Keeps a manifest of what it wrote so --unmirror can undo it exactly."""
+    manifest_path = HERE / "mirror-manifest.json"
+    try:
+        manifest = json.load(open(manifest_path, encoding="utf-8"))
+    except Exception:
+        manifest = {"written": []}
+    if UNMIRROR:
+        removed = 0
+        for w in manifest.get("written", []):
+            try:
+                Path(w).unlink(); removed += 1
+            except Exception:
+                pass
+        manifest_path.write_text(json.dumps({"written": []}, indent=1), encoding="utf-8")
+        log(f"unmirror: removed {removed} mirrored records")
+        return 0
+    if not CFG.get("mirror_sessions"):
+        return 0
+    dirs = [info["index_dir"] for info in accts.values() if info["email"] not in ("(unknown account)",)]
+    if len(dirs) < 2:
+        return 0
+    deleted = set()
+    for d in dirs:
+        for m in d.glob("deleted_*"):
+            deleted.add(m.name.replace("deleted_", ""))
+    newest = {}  # session id -> (mtime, path, record)
+    for d in dirs:
+        for f in d.glob("local_*.json"):
+            try:
+                rec = json.load(open(f, encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(rec, dict) or rec.get("isArchived"):
+                continue
+            sid = f.stem.replace("local_", "")
+            if sid in deleted:
+                continue
+            m = f.stat().st_mtime
+            if sid not in newest or m > newest[sid][0]:
+                newest[sid] = (m, f, rec)
+    written = set(manifest.get("written", []))
+    n = 0
+    for sid, (m, src, rec) in newest.items():
+        for d in dirs:
+            dst = d / src.name
+            if dst == src:
+                continue
+            if dst.exists() and dst.stat().st_mtime >= m:
+                continue
+            if dst.exists() and str(dst) not in written:
+                continue  # the other account has its own, older, native copy; leave it alone
+            try:
+                shutil.copy2(src, dst)
+                written.add(str(dst)); n += 1
+            except Exception:
+                pass
+    manifest_path.write_text(json.dumps({"written": sorted(written)}, indent=1), encoding="utf-8")
+    log(f"mirror: {n} records copied this run, {len(written)} mirrored records in total")
+    return n
+
+
+# ---------- history: a ledger that only grows, plus backups ----------
+def update_history(accts, sessions, cowork, transcripts_by_slug):
+    """history/ledger.json remembers every session ever seen, even after the app or a cleanup deletes it.
+    history/records/ keeps the latest copy of every sidebar record file.
+    history/transcripts/ (optional, backup_transcripts: true) keeps a copy of every transcript, updated when it changes."""
+    hdir = HERE / "history"
+    (hdir / "records").mkdir(parents=True, exist_ok=True)
+    ledger_path = hdir / "ledger.json"
+    try:
+        ledger = json.load(open(ledger_path, encoding="utf-8"))
+    except Exception:
+        ledger = {}
+    now = NOW.isoformat(timespec="seconds")
+
+    def note(key, **fields):
+        e = ledger.setdefault(key, {"first_seen": now})
+        e["last_seen"] = now
+        for k, v in fields.items():
+            if v not in (None, ""):
+                e[k] = v
+        e.setdefault("accounts", [])
+        if fields.get("account") and fields["account"] not in e["accounts"]:
+            e["accounts"].append(fields["account"])
+
+    for s_ in sessions:
+        note(s_["cli"] or s_.get("sid", ""), kind="code", title=s_["title"], cwd=s_["cwd"], account=s_["email"],
+             last_activity=s_["last"].isoformat(timespec="seconds") if s_["last"] else None, archived=s_.get("archived", False))
+    for c in cowork:
+        note(c["cli"] or c["title"], kind="cowork", title=c["title"], folders=c["folders"], account=c["email"],
+             last_activity=c["last"].isoformat(timespec="seconds") if c["last"] else None,
+             transcript=str(c["transcript"]) if c["transcript"] else None)
+    for slug, rows in transcripts_by_slug.items():
+        for t in rows:
+            note(t["cli"], kind="terminal", title=t["title"], project_slug=slug,
+                 last_activity=t["last"].isoformat(timespec="seconds") if t["last"] else None)
+    ledger_path.write_text(json.dumps(ledger, indent=1, ensure_ascii=False), encoding="utf-8")
+
+    copied = 0
+    for key, info in accts.items():
+        sub = hdir / "records" / (info["email"].replace("@", "_at_") if info["email"] else "_".join(key))
+        sub.mkdir(parents=True, exist_ok=True)
+        for f in list(info["index_dir"].glob("local_*.json")) + list(info["index_dir"].glob("scheduled-tasks.json")) + list(info["index_dir"].glob("archived-sessions.idx")):
+            dst = sub / f.name
+            try:
+                if not dst.exists() or dst.stat().st_mtime < f.stat().st_mtime or dst.stat().st_size != f.stat().st_size:
+                    shutil.copy2(f, dst); copied += 1
+            except Exception:
+                pass
+    tcopied = 0
+    if CFG.get("backup_transcripts"):
+        tdir = hdir / "transcripts"
+        srcs = []
+        root = CLAUDE / "projects"
+        if root.exists():
+            for pdir in root.iterdir():
+                if pdir.is_dir() and "scratch-workspaces" not in pdir.name:
+                    for j in pdir.glob("*.jsonl"):
+                        srcs.append((j, tdir / pdir.name / j.name))
+        for c in cowork:
+            if c["transcript"]:
+                srcs.append((c["transcript"], tdir / "cowork" / c["transcript"].name))
+        for src, dst in srcs:
+            try:
+                st = src.stat()
+                if not dst.exists() or dst.stat().st_size != st.st_size or dst.stat().st_mtime < st.st_mtime:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst); tcopied += 1
+            except Exception:
+                pass
+    log(f"history: {len(ledger)} sessions in ledger, {copied} record files refreshed, {tcopied} transcripts backed up")
+    return len(ledger)
+
+
 # ---------- projects ----------
 def last_touched(folder, max_depth=2):
     best = 0
@@ -329,6 +484,9 @@ def build():
     # Cowork sessions, attached to every project folder they had open
     cowork = load_cowork_sessions(accts)
 
+    mirrored = mirror_sessions(accts)
+    ledger_n = update_history(accts, sessions, cowork, transcripts)
+
     # Which sessions (anywhere) mention each project folder by name -> "also worked on from elsewhere"
     names = list(projects.keys())
     by_cli = {s["cli"]: s for s in sessions if s["cli"]}
@@ -410,7 +568,8 @@ def build():
 
     cowork_list = sorted([c for c in cowork if not c["auto"]], key=lambda s: s["last"] or datetime.datetime.min, reverse=True)
     return dict(accts=accts, current_key=current_key, current_info=current_info, rows=rows, tasks=tasks,
-                primary_email=primary_email, n_sessions=len(sessions), n_cowork=len(cowork), cowork=cowork_list)
+                primary_email=primary_email, n_sessions=len(sessions), n_cowork=len(cowork), cowork=cowork_list,
+                mirrored=mirrored, ledger_n=ledger_n)
 
 
 # ---------- render ----------
@@ -427,7 +586,10 @@ def render_md(D):
     for key, info in sorted(D["accts"].items(), key=lambda kv: -kv[1]["last_active"]):
         flag = "**<- app was last used as this**" if key == D["current_key"] else ""
         A(f"| {info['email']} | {info['org_name']} | {info['plan']} | {info['n_sessions']} | {fmt(datetime.datetime.fromtimestamp(info['last_active'])) if info['last_active'] else ''} | {flag} |")
-    if cur and cur.get("email") != D["primary_email"]:
+    if CFG.get("mirror_sessions"):
+        A(f"\n> **Mirrored.** Every Code session is copied into every account's sidebar, so the login does not matter for Code sessions. "
+          f"Claude-tab (Cowork) sessions are not mirrored and still need the account shown. App was last used as {cur.get('email')}.\n")
+    elif cur and cur.get("email") != D["primary_email"]:
         A(f"\n> **WARNING: the desktop app was last used as {cur.get('email')}, not {D['primary_email']}.** "
           f"The sidebar only shows that account's sessions. Everything else is still on disk. "
           f"Sign out and back in as {D['primary_email']} to see it all.\n")
@@ -524,9 +686,11 @@ def render_html(D):
             return f"{d // 7} weeks ago"
         return f"{d // 30} months ago"
 
-    def acct_note(email):
+    def acct_note(email, kind="code"):
         if email in (cur_email, "terminal"):
             return ""
+        if kind == "code" and CFG.get("mirror_sessions"):
+            return f'<span class="dim">from {E(email)}</span>'
         return f'<span class="needs">needs {E(email)}</span>'
 
     def sess_line(s, kind="code"):
@@ -539,7 +703,7 @@ def render_html(D):
         can_resume = kind != "cowork" and s.get("kind", "code") == "code" and s.get("cli")
         cmd = f'<button class="copy" data-copy="claude --resume {E(s["cli"])}" title="Copy the resume command">copy resume</button>' if can_resume else ""
         return (f'<li><span class="when">{E(ago(s["last"]))}</span><span class="what">{how}{E(s["title"][:70]) or "(untitled)"}</span>'
-                f'<span class="act">{cmd}{acct_note(s["email"])}</span></li>')
+                f'<span class="act">{cmd}{acct_note(s["email"], "cowork" if kind == "cowork" else "code")}</span></li>')
 
     order = CFG.get("group_order", [])
     groups, renamed = {}, []
@@ -565,7 +729,7 @@ def render_html(D):
                 btn = f'<button class="copy primary" data-copy="{E(cmd)}">Copy resume command</button>'
             tag = "" if pick_kind == "code" else ' <span class="k-cw-inline">Claude tab</span>'
             resume = (f'<div class="pickup"><div class="lbl">Pick up here</div><div class="pick-title">{E(pick["title"][:80]) or "(untitled)"}{tag}</div>'
-                      f'<div class="pick-meta">{E(ago(pick["last"]))}{acct_note(pick["email"])}</div>{btn}</div>')
+                      f'<div class="pick-meta">{E(ago(pick["last"]))}{acct_note(pick["email"], pick_kind)}</div>{btn}</div>')
         else:
             resume = '<div class="pickup"><div class="lbl">Pick up here</div><div class="pick-meta">No session has been opened in this folder yet. Start one from New session.</div></div>'
         files = "".join(f'<div class="file">{E(f)}</div>' for f in r["state"][:3]) or '<div class="dim">no state file</div>'
@@ -592,7 +756,11 @@ def render_html(D):
         f'<section><h2>{E(g)} <small>{len(groups[g])}</small></h2><div class="grid">{"".join(card(r) for r in groups[g])}</div></section>'
         for g in group_names)
 
-    if on_primary:
+    if CFG.get("mirror_sessions"):
+        banner = (f'<div class="banner ok"><div class="banner-k">Mirrored</div><div class="banner-v">Every Code session is mirrored into every account\'s sidebar, so it does not matter which login the app is on. '
+                  f'The app was last used as <b>{E(cur_email)}</b>. A session mirrored since the app last started appears after the next sign-in or restart. '
+                  f'Claude-tab sessions are not mirrored; those still need the account shown on them.</div></div>')
+    elif on_primary:
         banner = (f'<div class="banner ok"><div class="banner-k">You are set</div><div class="banner-v">The app was last used as <b>{E(cur_email)}</b>. '
                   f'Every session below is reachable from the sidebar.</div></div>')
     else:
@@ -738,7 +906,13 @@ def main():
         md = render_md(D)
         Path(CFG.get("output_md", HERE / "00-WORKFLOW-MAP.md")).write_text(md, encoding="utf-8")
         Path(CFG.get("output_html", HERE / "00-WORKFLOW-MAP.html")).write_text(render_html(D), encoding="utf-8")
-        (HERE / "last-run.log").write_text(f"ok {NOW.isoformat()} projects={len(D['rows'])} sessions={D['n_sessions']} app_as={(D['current_info'] or {}).get('email')}\n", encoding="utf-8")
+        (HERE / "last-run.log").write_text(f"ok {NOW.isoformat()} projects={len(D['rows'])} sessions={D['n_sessions']} cowork={D['n_cowork']} ledger={D['ledger_n']} mirrored={D['mirrored']} app_as={(D['current_info'] or {}).get('email')}\n", encoding="utf-8")
+        if HOOK_EVENT == "SessionStart":
+            cur = (D["current_info"] or {}).get("email")
+            hidden = sum(1 for r in D["rows"] for s_ in r["work"] if s_["email"] not in (cur, "terminal"))
+            recent = ", ".join(r["name"] for r in D["rows"][:4])
+            state = "mirrored into every account's sidebar" if CFG.get("mirror_sessions") else (f"{hidden} sessions belong to {D['primary_email']} and are hidden from this account's sidebar" if hidden and cur != D["primary_email"] else "all visible")
+            print(f"Workflow Map: {len(D['rows'])} projects, {D['n_sessions']} Code + {D['n_cowork']} Cowork sessions; app on {cur}; {state}. Most recent: {recent}. Full map: {CFG.get('output_md', HERE / '00-WORKFLOW-MAP.md')}")
         log(f"wrote {CFG.get('output_html', HERE / '00-WORKFLOW-MAP.html')}: {len(D['rows'])} projects, {D['n_sessions']} desktop sessions, {D['n_cowork']} cowork sessions")
     except Exception:
         (HERE / "last-run.log").write_text("ERROR " + NOW.isoformat() + "\n" + traceback.format_exc(), encoding="utf-8")

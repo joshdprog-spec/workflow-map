@@ -50,6 +50,28 @@ The starter config has empty descriptions. Open any Claude session and say:
 
 The installed skill tells Claude how: read each folder's README or state file and latest sessions, write one plain sentence per project, assign a group, rebuild. Correct whatever it gets wrong in `config.json`.
 
+## Two accounts? Turn on the mirror
+
+Set `"mirror_sessions": true` in `config.json`. At every rebuild the builder copies each Code session's small sidebar record into every account's folder. The transcripts are already shared on disk, so a mirrored session opens normally from either login. Sign out and back in once after the first mirror and both sidebars show everything. From then on it is automatic.
+
+- Archived and deleted sessions are left alone.
+- Cowork (Claude-tab) sessions are not mirrored; the map still shows which account they need.
+- Undo it exactly with `python build-map.py --unmirror`. A manifest records every file the mirror wrote, and only those are removed.
+
+This writes into the desktop app's own data folder. It has been used on Windows against the app's session layout as of September 2026. If the app changes that layout the mirror may stop working, but it cannot delete anything of yours.
+
+## History that survives
+
+Every rebuild updates `history/ledger.json`: one entry per session ever seen, with its title, folder, account, kind, first and last seen. Entries are never removed, so a session the app or a cleanup deletes is still on record. `history/records/` keeps the latest copy of every sidebar record file.
+
+Set `"backup_transcripts": true` to also keep a copy of every transcript under `history/transcripts/`, refreshed when the original changes. Budget roughly the size of `~/.claude/projects` (often a gigabyte or two). The first run copies everything; later runs copy only what changed.
+
+Claude Code deletes terminal transcripts after 30 days by default. `python install.py --keep-transcripts` raises that to ten years by setting `cleanupPeriodDays` in your Claude settings.
+
+## The session-start line
+
+The SessionStart hook prints one line into every new Claude session: how many projects and sessions exist, which account the app is on, whether anything is hidden, the most recently touched projects, and where the full map is. So any session you open already knows the state of your work before you say a word.
+
 ## config.json
 
 | Key | What it does |
@@ -63,6 +85,8 @@ The installed skill tells Claude how: read each folder's README or state file an
 | `exclude` | Subfolders of `projects_root` that are not projects. |
 | `active_days` | Projects touched within this many days go in the top section of the Markdown map. |
 | `min_mentions` | How many times a session must mention a project's folder name to count as having worked on it from another folder. Raise it if the "from" lines look noisy. |
+| `mirror_sessions` | Copy every Code session's sidebar record into every account, so any login shows all of them. Default off. |
+| `backup_transcripts` | Keep a copy of every transcript under `history/`. Default off. |
 | `automation_title_patterns` | Session titles matching these are scheduled-task runs, listed as counts rather than as work. |
 
 ## Files
@@ -74,6 +98,8 @@ The installed skill tells Claude how: read each folder's README or state file an
 | `build-map.py` | The builder. `python build-map.py --verbose` rebuilds by hand. |
 | `config.json` | Your descriptions, groups, aliases, exclusions. The only file you edit. |
 | `mention-cache.json` | Speeds up the transcript scan. Safe to delete. |
+| `mirror-manifest.json` | Every sidebar record the mirror has written. `--unmirror` removes exactly these. |
+| `history/` | The ledger, record backups, and (optionally) transcript backups. |
 | `last-run.log` | One line per rebuild, or the traceback if it failed. |
 
 ## What it reads
