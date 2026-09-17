@@ -63,7 +63,7 @@ def write_config(dest, root):
         "backup_transcripts": False,
         "search_index": True,
         "search_server": False,
-        "search_port": 8765,
+        "search_port": 27183,
         "exclude": exclude,
         "aliases": {},
         "group_order": [],

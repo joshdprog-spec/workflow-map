@@ -444,7 +444,7 @@ def ensure_search_server():
     """Start search-server.py detached if nothing answers on the configured port."""
     if not CFG.get("search_server"):
         return False
-    port = int(CFG.get("search_port", 8765))
+    port = int(CFG.get("search_port", 27183))
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=0.5):
             return True
@@ -648,7 +648,7 @@ def build():
     cowork_list = sorted([c for c in cowork if not c["auto"]], key=lambda s: s["last"] or datetime.datetime.min, reverse=True)
     return dict(accts=accts, current_key=current_key, current_info=current_info, rows=rows, tasks=tasks,
                 primary_email=primary_email, n_sessions=len(sessions), n_cowork=len(cowork), cowork=cowork_list,
-                mirrored=mirrored, ledger_n=ledger_n, search_up=search_up, search_port=int(CFG.get("search_port", 8765)))
+                mirrored=mirrored, ledger_n=ledger_n, search_up=search_up, search_port=int(CFG.get("search_port", 27183)))
 
 
 # ---------- render ----------

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local conversation search for the Workflow Map.
 
-    python search-server.py                 serve on http://127.0.0.1:8765 (stays up; the map talks to it)
+    python search-server.py                 serve on http://127.0.0.1:27183 (stays up; the map talks to it)
     python search-server.py --query "text"  one-off search from a terminal or a Claude session
     python search-server.py --session ID    print one conversation
 
@@ -17,9 +17,9 @@ import search_index  # noqa: E402
 
 DB = HERE / "history" / "search.sqlite"
 LEDGER = HERE / "history" / "ledger.json"
-PORT = 8765
+PORT = 27183
 try:
-    PORT = int(json.load(open(HERE / "config.json", encoding="utf-8")).get("search_port", 8765))
+    PORT = int(json.load(open(HERE / "config.json", encoding="utf-8")).get("search_port", 27183))
 except Exception:
     pass
 

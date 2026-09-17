@@ -78,7 +78,7 @@ The search box at the top does three things at once:
 
 Number 3 uses a full-text index (`history/search.sqlite`, SQLite FTS5) that every rebuild keeps current. Only dialogue is indexed; tool output and file contents are not, so the index stays small (a few percent of the transcripts). Phrases in quotes work. Every word is required; the last word matches as a prefix.
 
-The map page is a plain file, so to query the index it talks to a tiny local server, `search-server.py`, on `127.0.0.1:8765`. Enable it with `python install.py --search` (or `"search_server": true` in config): the builder starts it if it is not running, at every session start. It listens on the loopback address only. It also works without the map:
+The map page is a plain file, so to query the index it talks to a tiny local server, `search-server.py`, on `127.0.0.1:27183`. Enable it with `python install.py --search` (or `"search_server": true` in config): the builder starts it if it is not running, at every session start. It listens on the loopback address only. It also works without the map:
 
 ```bash
 python search-server.py --query "pricing decision"     # from a terminal, or from a Claude session
@@ -108,7 +108,7 @@ The SessionStart hook prints one line into every new Claude session: how many pr
 | `backup_transcripts` | Keep a copy of every transcript under `history/`. Default off. |
 | `search_index` | Maintain the full-text index of conversations. Default on. |
 | `search_server` | Keep the local search server running so the map can search inside conversations. Default off. |
-| `search_port` | Port for that server on 127.0.0.1. Default 8765. |
+| `search_port` | Port for that server on 127.0.0.1. Default 27183. |
 | `automation_title_patterns` | Session titles matching these are scheduled-task runs, listed as counts rather than as work. |
 
 ## Files
