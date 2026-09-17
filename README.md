@@ -125,7 +125,8 @@ The SessionStart hook prints one line into every new Claude session: how many pr
 
 | File | |
 |---|---|
-| `00-WORKFLOW-MAP.html` | The map. Open in a browser. Dark and light themes, search box, works on a phone. |
+| `00-WORKFLOW-MAP.html` | The map. Open in a browser. An app with five views (Home, Projects, Sessions, Assets, Automations) and a search box that reaches inside conversations. Dark and light themes, works on a phone. Press `/` to search. |
+| `render_v3.py` | The page renderer. `build-map.py` gathers, this draws. |
 | `00-WORKFLOW-MAP.md` | Same content as Markdown, for Claude to read at the start of a session. |
 | `build-map.py` | The builder. `python build-map.py --verbose` rebuilds by hand. |
 | `config.json` | Your descriptions, groups, aliases, exclusions. The only file you edit. |

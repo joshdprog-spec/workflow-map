@@ -172,7 +172,7 @@ def main():
         sys.exit("Python 3.9 or newer is required.")
     print(f"Installing Workflow Map to {dest}")
     dest.mkdir(parents=True, exist_ok=True)
-    for fn in ("build-map.py", "search_index.py", "search-server.py", "README.md"):
+    for fn in ("build-map.py", "render_v3.py", "search_index.py", "search-server.py", "README.md"):
         shutil.copy2(HERE / fn, dest / fn)
     write_config(dest, Path(a.root).expanduser().resolve())
     if a.search:
