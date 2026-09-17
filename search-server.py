@@ -130,6 +130,10 @@ class H(BaseHTTPRequestHandler):
 
 
 def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows consoles default to cp1252
+    except Exception:
+        pass
     ap = argparse.ArgumentParser()
     ap.add_argument("--query")
     ap.add_argument("--session")
