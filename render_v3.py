@@ -31,6 +31,20 @@ def _match_arts(name, arts, extra_words=""):
     return out
 
 
+def _data_uri(path, limit=600_000):
+    """Small images are baked into the page so they show anywhere; larger ones are left as a path (served locally)."""
+    try:
+        p = Path(path)
+        if not p.exists() or p.stat().st_size > limit:
+            return ""
+        import base64
+        ext = p.suffix.lower().lstrip(".")
+        mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp", "gif": "image/gif", "svg": "image/svg+xml"}.get(ext, "image/png")
+        return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode()
+    except Exception:
+        return ""
+
+
 def build_data(D, CFG, HERE, NOW, ROOT):
     cur = D["current_info"] or {}
     cur_email = cur.get("email")
@@ -52,7 +66,7 @@ def build_data(D, CFG, HERE, NOW, ROOT):
             "work": [_sess(s) for s in r["work"]], "cowork": [_sess(dict(s, kind="cowork")) for s in r["cowork"]],
             "elsewhere": [_sess(s) for s in r["elsewhere"]], "n_work": r["n_work"], "n_cowork": r["n_cowork"], "n_elsewhere": r["n_elsewhere"],
             "n_mem": r["n_mem"], "n_auto": r["n_auto"], "arts": _match_arts(r["name"] + " " + (r["alias_to"] or ""), CFG.get("artifacts", [])),
-            "thumb": D.get("thumbs", {}).get("projects", {}).get(r["name"], "")})
+            "thumb": _data_uri(D.get("thumbs", {}).get("projects", {}).get(r["name"], ""))})
     ledger = []
     try:
         L = json.load(open(HERE / "history" / "ledger.json", encoding="utf-8"))
@@ -72,11 +86,12 @@ def build_data(D, CFG, HERE, NOW, ROOT):
                 tasks.append({"name": name, "desc": desc, "email": email, "on": bool(en), "last": str(lr)[:16], "cwd": cwd})
         else:
             tasks.append({"name": name, "desc": desc, "email": "", "on": False, "last": "", "cwd": ""})
-    outputs = [{"t": o["title"], "a": o["account"], "d": _iso(o["last"]), "folders": o["folders"], "dir": o["dir"], "files": o["files"], "thumb": o.get("thumb", "")} for o in D.get("cowork_outputs", [])]
+    outputs = [{"t": o["title"], "a": o["account"], "d": _iso(o["last"]), "folders": o["folders"], "dir": o["dir"], "files": o["files"],
+                "thumb": _data_uri(D.get("thumbs", {}).get("deliverables", {}).get(o["dir"], ""))} for o in D.get("cowork_outputs", [])]
     cps = [{"name": x["name"], "desc": x["description"], "a": x["account"], "docs": x["docs"], "synced": x["synced"]} for x in D.get("claude_projects", [])]
     loose = [_sess(dict(c, kind="cowork")) for c in D["cowork"] if not c["folders"]]
     products = [{"name": x["name"], "stage": x["stage"], "project": x["project"], "folder": x["folder"], "where": x["where"], "page": x["page"], "tags": x.get("tags", ""),
-                 "arts": _match_arts(x["name"], CFG.get("artifacts", [])), "thumb": D.get("thumbs", {}).get("products", {}).get(x["folder"], ""),
+                 "arts": _match_arts(x["name"], CFG.get("artifacts", [])), "thumb": _data_uri(D.get("thumbs", {}).get("products", {}).get(x["folder"], "")),
                  "ship_kit": x["ship_kit"], "offer": x["offer"], "course": x["course"], "bundle": x["bundle"], "last": _iso(x["last"]), "n_files": x["n_files"]}
                 for x in D.get("products", [])]
     # other machines
@@ -257,8 +272,9 @@ function mchip(m){return m?'<span class="chip mc k">on '+esc(m)+'</span>':''}
 function fileUrl(p){return 'http://127.0.0.1:'+M.port+'/file?path='+encodeURIComponent(p)}
 function hue(s){var h=0;for(var i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return h%360}
 function mono(name){var w=name.replace(/[^A-Za-z0-9 ]/g,' ').trim().split(/\s+/);var t=(w[0]||'?').slice(0,1)+(w[1]?w[1].slice(0,1):(w[0]||'').slice(1,2));return {t:t.toUpperCase(),bg:'hsl('+hue(name)+' 45% 42%)'}}
-function tile(name,img){if(img)return '<div class="tile"><img loading="lazy" src="'+fileUrl(img)+'" alt=""></div>';var m=mono(name);return '<div class="tile" style="background:'+m.bg+'">'+m.t+'</div>'}
-function shot(name,img,cls){if(img)return '<div class="shot '+(cls||'')+'"><img loading="lazy" src="'+fileUrl(img)+'" alt=""></div>';var m=mono(name);return '<div class="shot mono '+(cls||'')+'" style="background:'+m.bg+'">'+m.t+'</div>'}
+function imgSrc(img){return img.indexOf('data:')===0?img:fileUrl(img)}
+function tile(name,img){var m=mono(name);if(img)return '<div class="tile" style="background:'+m.bg+'"><img loading="lazy" src="'+imgSrc(img)+'" alt="" onerror="this.remove()"></div>';return '<div class="tile" style="background:'+m.bg+'">'+m.t+'</div>'}
+function shot(name,img,cls){var m=mono(name);if(img)return '<div class="shot '+(cls||'')+'" style="background:'+m.bg+'"><img loading="lazy" src="'+imgSrc(img)+'" alt="" onerror="this.parentNode.classList.add(\'mono\');this.parentNode.textContent=\''+m.t+'\'"></div>';return '<div class="shot mono '+(cls||'')+'" style="background:'+m.bg+'">'+m.t+'</div>'}
 function sessLine(s){var can=(s.k==='code'||s.k==='terminal')&&s.id&&s.id.length>20;return '<div class="sess"><span class="when">'+esc(ago(s.d))+'</span><span class="what">'+kchip(s.k)+(s.from?'<span class="chip k">from '+esc(s.from)+'</span>':'')+esc(s.t||'(untitled)')+'</span><span>'+(can?copyBtn('claude --resume '+s.id):'')+acctNote(s.a,s.k)+'</span></div>'}
 
 /* ---------- account pill + banner ---------- */

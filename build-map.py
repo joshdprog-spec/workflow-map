@@ -558,7 +558,7 @@ def _browser():
 def snapshot_page(html_path, out_png, browser):
     """Screenshot an HTML file with a headless browser. Returns True on success."""
     try:
-        r = subprocess.run([browser, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--window-size=1200,750",
+        r = subprocess.run([browser, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--window-size=600,375",
                             f"--screenshot={out_png}", Path(html_path).resolve().as_uri()],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
         return Path(out_png).exists() and Path(out_png).stat().st_size > 1000
@@ -595,10 +595,10 @@ def best_image(folder, max_depth=3):
     return cands[0][2]
 
 
-def make_thumbnails(products, projects):
-    """Returns {"products": {folder: png}, "projects": {name: image}}."""
+def make_thumbnails(products, projects, D_outputs=()):
+    """Returns {"products": {folder: png}, "projects": {name: image}, "deliverables": {dir: png}}."""
     if not CFG.get("thumbnails", True):
-        return {"products": {}, "projects": {}}
+        return {"products": {}, "projects": {}, "deliverables": {}}
     tdir = HERE / "history" / "thumbs"
     tdir.mkdir(parents=True, exist_ok=True)
     browser = _browser()
@@ -611,7 +611,7 @@ def make_thumbnails(products, projects):
         nonlocal made
         if not browser or not html_path or not Path(html_path).exists():
             return None
-        png = tdir / (hashlib.sha1(str(html_path).lower().encode()).hexdigest()[:16] + ".png")
+        png = tdir / ("p2-" + hashlib.sha1(str(html_path).lower().encode()).hexdigest()[:16] + ".png")
         if not png.exists() or png.stat().st_mtime < Path(html_path).stat().st_mtime:
             if snapshot_page(html_path, png, browser):
                 made += 1
@@ -619,9 +619,27 @@ def make_thumbnails(products, projects):
                 return None
         return str(png)
 
+    def picture(img_path):
+        """A uniform 600x375 thumbnail of any image, via a wrapper page. Falls back to the image itself if no browser."""
+        nonlocal made
+        if not img_path or not Path(img_path).exists():
+            return None
+        if not browser:
+            return str(img_path)
+        png = tdir / ("i2-" + hashlib.sha1(str(img_path).lower().encode()).hexdigest()[:16] + ".png")
+        if not png.exists() or png.stat().st_mtime < Path(img_path).stat().st_mtime:
+            wrapper = tdir / "_wrap.html"
+            wrapper.write_text(f'<!doctype html><html><body style="margin:0;background:#141B24"><img src="{Path(img_path).resolve().as_uri()}" '
+                               f'style="width:600px;height:375px;object-fit:cover;object-position:top;display:block"></body></html>', encoding="utf-8")
+            if snapshot_page(wrapper, png, browser):
+                made += 1
+            else:
+                return str(img_path)
+        return str(png)
+
     for p in products:
         ov = next((v for k, v in overrides.items() if k.lower() in (p["name"] + " " + p["where"]).lower()), None)
-        img = ov or snap(p.get("page")) or best_image(p["folder"])
+        img = ov or snap(p.get("page")) or picture(best_image(p["folder"]))
         if img:
             out["products"][p["folder"]] = img
     for name, info in projects.items():
@@ -637,9 +655,15 @@ def make_thumbnails(products, projects):
             root_page = next((str(info["folder"] / f) for f in ("index.html", "start-here.html", "app.html") if (info["folder"] / f).exists()), None)
             img = snap(root_page) if root_page else None
         if not img:
-            img = best_image(info["folder"])
+            img = picture(best_image(info["folder"]))
         if img:
             out["projects"][name] = img
+    out["deliverables"] = {}
+    for o in D_outputs:
+        if o.get("thumb"):
+            t = picture(o["thumb"])
+            if t:
+                out["deliverables"][o["dir"]] = t
     log(f"thumbnails: {len(out['products'])} products, {len(out['projects'])} projects, {made} new snapshots" + ("" if browser else " (no headless browser found; folder images only)"))
     return out
 
@@ -944,7 +968,6 @@ def build():
     except Exception as e:
         log(f"file index skipped: {e}")
     products = detect_products(doc_roots)
-    thumbs = make_thumbnails(products, projects)
     machines = load_machines()
     elsewhere = {n: [] for n in names}
     min_mentions = int(CFG.get("min_mentions", 6))  # a folder listing mentions a name once or twice; real work mentions it many times
@@ -1005,6 +1028,7 @@ def build():
     cowork_list = sorted([c for c in cowork if not c["auto"]], key=lambda s: s["last"] or datetime.datetime.min, reverse=True)
     claude_projects = load_claude_projects(accts)
     cowork_outputs = load_cowork_outputs(cowork)
+    thumbs = make_thumbnails(products, projects, cowork_outputs)
     publish_history(products, accts, cowork_outputs, claude_projects)
     return dict(accts=accts, current_key=current_key, current_info=current_info, rows=rows, tasks=tasks,
                 primary_email=primary_email, n_sessions=len(sessions), n_cowork=len(cowork), cowork=cowork_list,
