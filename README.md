@@ -75,6 +75,10 @@ The map finds products by their own files, not by folder name: a sales page, a s
 
 Attach the words you actually use with `product_tags` in `config.json`, for example `"system-v2": "climbing system valorant"`, so searching your own words finds the product. Add products the detector cannot see with a `products` list (`name, stage, folder, page, tags`).
 
+## Thumbnails
+
+Product cards show a snapshot of their sales page, taken with a headless Chrome or Edge if one is installed (refreshed when the page changes). Projects reuse their product's snapshot, else a snapshot of a root page, else the best image in the folder. Deliverables show their first image. Anything without an image gets a monogram tile. `thumbnail_overrides` in config maps a name to an image; `browser_path` points at a browser if it is not in the usual place; `thumbnails: false` turns it off.
+
 ## Files are searchable too
 
 Every document in every project (Markdown, HTML, text, code, and the names of PDFs, images and zips) is indexed by name, title and first lines. Search results show a Files column with a link that opens the file from the local server. So "sales page", "launch", "offer copy" or a product's title find the actual file and show where it is.

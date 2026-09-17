@@ -531,8 +531,116 @@ def load_cowork_outputs(cowork):
                 files.append(str(Path(root, n).relative_to(odir)))
         if files:
             files.sort()
-            out.append({"title": c["title"], "account": c["email"], "last": c["last"], "folders": c["folders"], "dir": str(odir), "files": files})
+            img = next((str(odir / f) for f in files if Path(f).suffix.lower() in IMG_EXT), None)
+            out.append({"title": c["title"], "account": c["email"], "last": c["last"], "folders": c["folders"], "dir": str(odir), "files": files, "thumb": img})
     out.sort(key=lambda x: x["last"] or datetime.datetime.min, reverse=True)
+    return out
+
+
+# ---------- thumbnails ----------
+IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+IMG_HINT = re.compile(r"(cover|thumb|banner|hero|logo|icon|og-|og_|preview|screenshot|money|poster|card|art)", re.I)
+BROWSERS = [r"C:\Program Files\Google\Chrome\Application\chrome.exe", r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"]
+
+
+def _browser():
+    b = CFG.get("browser_path")
+    if b and Path(b).exists():
+        return b
+    for b in BROWSERS:
+        if Path(b).exists():
+            return b
+    return None
+
+
+def snapshot_page(html_path, out_png, browser):
+    """Screenshot an HTML file with a headless browser. Returns True on success."""
+    try:
+        r = subprocess.run([browser, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--window-size=1200,750",
+                            f"--screenshot={out_png}", Path(html_path).resolve().as_uri()],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+        return Path(out_png).exists() and Path(out_png).stat().st_size > 1000
+    except Exception:
+        return False
+
+
+def best_image(folder, max_depth=3):
+    """The most thumbnail-like image in a folder: hinted names first, then a sensible size."""
+    folder = Path(folder)
+    if not folder.exists():
+        return None
+    base = len(folder.parts)
+    cands = []
+    for cur, dirs, files in os.walk(folder):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".") and not NOT_A_PRODUCT_DIR.search(d)]
+        if len(Path(cur).parts) - base >= max_depth:
+            dirs[:] = []
+        for fn in files:
+            p = Path(cur) / fn
+            if p.suffix.lower() not in IMG_EXT:
+                continue
+            try:
+                sz = p.stat().st_size
+            except Exception:
+                continue
+            if sz < 8_000 or sz > 6_000_000:
+                continue
+            score = (2 if IMG_HINT.search(fn) else 0) + (1 if 30_000 <= sz <= 2_000_000 else 0) - (len(Path(cur).parts) - base) * 0.1
+            cands.append((score, -sz, str(p)))
+    if not cands:
+        return None
+    cands.sort(reverse=True)
+    return cands[0][2]
+
+
+def make_thumbnails(products, projects):
+    """Returns {"products": {folder: png}, "projects": {name: image}}."""
+    if not CFG.get("thumbnails", True):
+        return {"products": {}, "projects": {}}
+    tdir = HERE / "history" / "thumbs"
+    tdir.mkdir(parents=True, exist_ok=True)
+    browser = _browser()
+    overrides = CFG.get("thumbnail_overrides", {})
+    out = {"products": {}, "projects": {}}
+    made = 0
+    import hashlib
+
+    def snap(html_path):
+        nonlocal made
+        if not browser or not html_path or not Path(html_path).exists():
+            return None
+        png = tdir / (hashlib.sha1(str(html_path).lower().encode()).hexdigest()[:16] + ".png")
+        if not png.exists() or png.stat().st_mtime < Path(html_path).stat().st_mtime:
+            if snapshot_page(html_path, png, browser):
+                made += 1
+            else:
+                return None
+        return str(png)
+
+    for p in products:
+        ov = next((v for k, v in overrides.items() if k.lower() in (p["name"] + " " + p["where"]).lower()), None)
+        img = ov or snap(p.get("page")) or best_image(p["folder"])
+        if img:
+            out["products"][p["folder"]] = img
+    for name, info in projects.items():
+        if not info["exists"]:
+            continue
+        ov = next((v for k, v in overrides.items() if k.lower() in name.lower()), None)
+        img = ov
+        if not img:  # a product inside this project? reuse its picture
+            for p in products:
+                if p["project"] == name and out["products"].get(p["folder"]):
+                    img = out["products"][p["folder"]]; break
+        if not img:
+            root_page = next((str(info["folder"] / f) for f in ("index.html", "start-here.html", "app.html") if (info["folder"] / f).exists()), None)
+            img = snap(root_page) if root_page else None
+        if not img:
+            img = best_image(info["folder"])
+        if img:
+            out["projects"][name] = img
+    log(f"thumbnails: {len(out['products'])} products, {len(out['projects'])} projects, {made} new snapshots" + ("" if browser else " (no headless browser found; folder images only)"))
     return out
 
 
@@ -836,6 +944,7 @@ def build():
     except Exception as e:
         log(f"file index skipped: {e}")
     products = detect_products(doc_roots)
+    thumbs = make_thumbnails(products, projects)
     machines = load_machines()
     elsewhere = {n: [] for n in names}
     min_mentions = int(CFG.get("min_mentions", 6))  # a folder listing mentions a name once or twice; real work mentions it many times
@@ -900,7 +1009,7 @@ def build():
     return dict(accts=accts, current_key=current_key, current_info=current_info, rows=rows, tasks=tasks,
                 primary_email=primary_email, n_sessions=len(sessions), n_cowork=len(cowork), cowork=cowork_list,
                 mirrored=mirrored, ledger_n=ledger_n, search_up=search_up, search_port=int(CFG.get("search_port", 27183)),
-                claude_projects=claude_projects, cowork_outputs=cowork_outputs, products=products, machines=machines, machine=MACHINE)
+                claude_projects=claude_projects, cowork_outputs=cowork_outputs, products=products, machines=machines, machine=MACHINE, thumbs=thumbs)
 
 
 # ---------- render ----------
