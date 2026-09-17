@@ -74,9 +74,15 @@ Claude Code deletes terminal transcripts after 30 days by default. `python insta
 
 `python install.py --shortcut` (Windows) puts a "Workflow Map" shortcut on the Desktop and in the Start Menu. It runs `open-map.pyw`, which starts the local server if it is not running and opens the map in a chromeless Chrome or Edge window, no tabs or address bar, with its own icon. Pin it to the taskbar from the running window. On other systems run `python open-map.pyw` yourself.
 
-## Glance: the sidebar, with what the sidebar cannot show
+## Three views: Map, Tree, Table
 
-The landing view. Every session grouped by folder like the desktop app's own sidebar, newest first, in dense columns so a whole history fits on one screen. Each row carries a colour dot for the account the session was born on, a `tab` mark for Claude-tab sessions (which must be opened from that account), an amber `!` when the session was started before a connector its account has today (hover to see which), and a click copies the resume command. Chips filter by account and by kind; automation runs are hidden until you ask for them. Folder headers link to the project's row.
+One page, three ways to look at the same record, and one search box that narrows whichever view is open (press Enter to search inside every conversation instead).
+
+- **Map** is the landing view: the things you are building, then one collapsible section per project group, each a grid of project cards with a thumbnail, the description, the latest session and a copy-resume button. Click a card to open it in the tree.
+- **Tree** is every project as a collapsible parent (thumbnail, description, counts, "read first" files, published pages) with every session that touched it as a leaf: a colour dot for the account the session was born on, `tab` for Claude-tab sessions, `from <folder>` for sessions that worked on it from elsewhere, an amber `!` when the session was started before a connector its account has today, and the age. Click a leaf to copy its resume command. Projects touched in the last two weeks start unfolded; folded state is remembered.
+- **Table** is every session as plain data, sortable by any column, with the same account dot and connector warning.
+
+Timeline (the day-by-day list), Assets and Automations stay as they were.
 
 ## Things you are building
 
@@ -171,7 +177,7 @@ A second line is about the session itself: which account it was started on and w
 
 | File | |
 |---|---|
-| `00-WORKFLOW-MAP.html` | The map. Open in a browser. An app with six views (Glance, Home, Projects, Sessions, Assets, Automations) and a search box that reaches inside conversations. Dark and light themes, works on a phone. Press `/` to search. |
+| `00-WORKFLOW-MAP.html` | The map. Open in a browser. An app with six views (Map, Tree, Table, Timeline, Assets, Automations) and a search box that reaches inside conversations. Dark and light themes, works on a phone. Press `/` to search. |
 | `open-map.pyw`, `workflow-map.ico` | The app launcher and its icon (see "Open it like an app"). |
 | `render_v3.py` | The page renderer. `build-map.py` gathers, this draws. |
 | `00-WORKFLOW-MAP.md` | Same content as Markdown, for Claude to read at the start of a session. |

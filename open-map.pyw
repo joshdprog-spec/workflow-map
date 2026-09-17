@@ -56,7 +56,7 @@ def main():
             time.sleep(0.2)
             if up():
                 break
-    target = URL + "#glance" if up() else PAGE.as_uri() + "#glance"
+    target = URL + "#home" if up() else PAGE.as_uri() + "#home"
     b = browser()
     if b:
         subprocess.Popen([b, f"--app={target}", "--window-size=1400,900", "--window-name=Workflow Map"], close_fds=True)
