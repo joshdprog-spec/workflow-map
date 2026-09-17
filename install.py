@@ -5,6 +5,9 @@
     python install.py --dir PATH      install somewhere else
     python install.py --no-hook       install and build, but do not touch Claude settings
     python install.py --uninstall     remove the hook (and offer to delete the folder)
+    python install.py --machine NAME --publish-to DIR --merge-from DIR
+                                      several computers, one map: publish this machine's history to a synced
+                                      folder and merge what other machines published there
 
 Requires Python 3.9+ and Claude Code (the desktop app or the terminal CLI).
 Nothing leaves your machine. The map only reads local files.
@@ -155,6 +158,9 @@ def main():
     ap.add_argument("--no-skill", action="store_true", help="do not install the Claude skill")
     ap.add_argument("--keep-transcripts", action="store_true", help="raise Claude Code's transcript retention from 30 days to 10 years")
     ap.add_argument("--search", action="store_true", help="keep a local conversation-search server running (127.0.0.1 only) so the map can search inside conversations")
+    ap.add_argument("--machine", default="", help="this computer's label on the map (default: its hostname)")
+    ap.add_argument("--publish-to", default="", help="a folder in a synced drive (OneDrive, Google Drive); this machine drops its history there so other machines can merge it")
+    ap.add_argument("--merge-from", action="append", default=[], help="another machine's published folder to merge in (repeatable)")
     ap.add_argument("--uninstall", action="store_true")
     a = ap.parse_args()
     dest = Path(a.dir).expanduser().resolve()
@@ -175,12 +181,23 @@ def main():
     for fn in ("build-map.py", "render_v3.py", "search_index.py", "search-server.py", "README.md"):
         shutil.copy2(HERE / fn, dest / fn)
     write_config(dest, Path(a.root).expanduser().resolve())
+    cfg_path = dest / "config.json"
+    cfg = json.load(open(cfg_path, encoding="utf-8"))
     if a.search:
-        cfg_path = dest / "config.json"
-        cfg = json.load(open(cfg_path, encoding="utf-8"))
         cfg["search_server"] = True
-        json.dump(cfg, open(cfg_path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
         print("  conversation search server enabled (starts with the first build, restarts with each session)")
+    if a.machine:
+        cfg["machine_name"] = a.machine
+    if a.publish_to:
+        cfg["publish_history_to"] = str(Path(a.publish_to).expanduser())
+        print(f"  this machine will publish its history to {cfg['publish_history_to']}\\{a.machine or 'hostname'}")
+    for mp in a.merge_from:
+        mp = str(Path(mp).expanduser())
+        cfg.setdefault("machines", [])
+        if not any(m.get("path") == mp for m in cfg["machines"]):
+            cfg["machines"].append({"name": Path(mp).name, "path": mp})
+            print(f"  will merge history from {mp}")
+    json.dump(cfg, open(cfg_path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
     if not a.no_skill:
         install_skill()
     if not a.no_hook:

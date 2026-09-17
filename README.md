@@ -13,7 +13,7 @@ One page. Every project folder on your computer, grouped by what it is, each wit
 
 It rebuilds itself every time a Claude session starts or ends. You never run anything.
 
-Nothing leaves your machine. It reads local files only: your project folders, Claude Code's transcripts, and the desktop app's session index.
+Nothing leaves your machine. It reads local files only: your project folders, Claude Code's transcripts, and the desktop app's session index. (If you choose to link several computers, it writes its history into a folder of yours on a synced drive; see below.)
 
 ## Why
 
@@ -40,6 +40,7 @@ python install.py --dir "D:\Maps\mine"     # install elsewhere
 python install.py --root ~/code            # your projects live under a folder other than home
 python install.py --no-hook                # build on demand only
 python install.py --uninstall              # remove the hook and skill
+python install.py --machine Laptop --publish-to <synced folder> --merge-from <synced folder>\OtherPC   # several computers, one map
 ```
 
 ## First thing to do after installing
@@ -107,6 +108,22 @@ While the server runs it also serves the map itself at `http://127.0.0.1:27183/m
 
 Without the server the first two searches still work; the page just says conversation search is not running.
 
+## Several computers? One map
+
+Install on each machine and point them at one folder in a synced drive (OneDrive, Google Drive, Dropbox, iCloud):
+
+```
+python install.py --search --machine "Home PC" --publish-to "C:\Users\you\OneDrive\WorkflowMap"
+python install.py --search --machine Laptop --publish-to "C:\Users\you\OneDrive\WorkflowMap" --merge-from "C:\Users\you\OneDrive\WorkflowMap\Home PC"
+```
+
+At every rebuild each machine drops its ledger, search index, products, assets and accounts under `<publish folder>\<machine name>\`. A machine that has `--merge-from` folders reads them and shows their sessions, products, accounts and artifacts on its own map, each tagged **on Laptop** (or whatever the other machine is called), with an **Other computers** block on Home and an **All computers / Home PC / Laptop** filter on Sessions. Search reaches into the other machine's conversations and files too; those hits are tagged with the machine and cannot be opened from here, since the files are over there.
+
+- Add `--merge-from` on both machines to see everything from either one.
+- Transcript backups are not published unless `"publish_transcripts": true` is set (large).
+- Nothing is uploaded by the map itself. It writes files into a folder; your drive client does the syncing.
+- If the other machine's folder is missing or empty it is simply not shown.
+
 ## The session-start line
 
 The SessionStart hook prints one line into every new Claude session: how many projects and sessions exist, which account the app is on, whether anything is hidden, the most recently touched projects, and where the full map is. So any session you open already knows the state of your work before you say a word.
@@ -130,6 +147,10 @@ The SessionStart hook prints one line into every new Claude session: how many pr
 | `search_server` | Keep the local search server running so the map can search inside conversations. Default off. |
 | `search_port` | Port for that server on 127.0.0.1. Default 27183. |
 | `automation_title_patterns` | Session titles matching these are scheduled-task runs, listed as counts rather than as work. |
+| `machine_name` | This computer's label on the map. Default: its hostname. |
+| `publish_history_to` | A folder in a synced drive. At every rebuild this machine drops its history there under `<machine_name>/`. Default off. |
+| `machines` | `[{"name": ..., "path": ...}]` other machines' published folders to merge into this map. |
+| `publish_transcripts` | Also publish transcript backups to the shared folder. Default off. |
 
 ## Files
 
@@ -161,6 +182,7 @@ The first build reads every transcript once to learn which sessions touched whic
 - Cowork sessions cannot be resumed from a terminal. The map shows them and which account they need; reopen them from the Claude tab's history.
 - The map reads the desktop app's index files as they exist today. If Anthropic changes that layout, the account and Cowork sections may go quiet until the builder is updated. Terminal sessions and project folders will still work.
 - One projects root per install. If your projects are spread across drives, install twice with different `--dir` and `--root`.
+- Sessions from another computer are listed and searchable, but a resume command only works on the computer that holds the transcript.
 
 ## License
 

@@ -536,6 +536,68 @@ def load_cowork_outputs(cowork):
     return out
 
 
+# ---------- several computers, one map ----------
+MACHINE = CFG.get("machine_name") or socket.gethostname()
+
+
+def publish_history(D_products, accts, cowork_outputs, claude_projects):
+    """Drop this machine's history into the shared folder so other machines can merge it."""
+    dest = CFG.get("publish_history_to")
+    if not dest:
+        return
+    out = Path(os.path.expanduser(dest)) / MACHINE
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        for fn in ("ledger.json", "search.sqlite"):
+            src = HERE / "history" / fn
+            if src.exists():
+                dst = out / fn
+                if not dst.exists() or dst.stat().st_mtime < src.stat().st_mtime or dst.stat().st_size != src.stat().st_size:
+                    shutil.copy2(src, dst)
+        data = {
+            "machine": MACHINE, "stamp": NOW.isoformat(timespec="minutes"), "root": str(ROOT),
+            "accounts": [{"email": i["email"], "org": i["org_name"], "plan": i["plan"], "n_code": i["n_sessions"]} for i in accts.values()],
+            "products": [{k: (v.isoformat(timespec="minutes") if isinstance(v, datetime.datetime) else v) for k, v in p.items()} for p in D_products],
+            "artifacts": CFG.get("artifacts", []),
+            "claude_projects": [{"name": x["name"], "description": x["description"], "account": x["account"], "docs": x["docs"], "synced": x["synced"]} for x in claude_projects],
+            "outputs": [{"title": o["title"], "account": o["account"], "last": o["last"].isoformat(timespec="minutes") if o["last"] else "", "folders": o["folders"], "dir": o["dir"], "files": o["files"][:40]} for o in cowork_outputs],
+        }
+        (out / "data.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        if CFG.get("publish_transcripts"):
+            tsrc = HERE / "history" / "transcripts"
+            if tsrc.exists():
+                for src in tsrc.rglob("*.jsonl"):
+                    dst = out / "transcripts" / src.relative_to(tsrc)
+                    if not dst.exists() or dst.stat().st_size != src.stat().st_size or dst.stat().st_mtime < src.stat().st_mtime:
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(src, dst)
+        log(f"published this machine's history to {out}")
+    except Exception as e:
+        log(f"publish skipped: {e}")
+
+
+def load_machines():
+    """Read what other machines published. Returns [{name, path, stamp, ledger:{}, data:{}}]."""
+    out = []
+    for m in CFG.get("machines", []):
+        p = Path(os.path.expanduser(m.get("path", "")))
+        name = m.get("name") or p.name
+        if not p.exists() or name == MACHINE:
+            continue
+        entry = {"name": name, "path": str(p), "stamp": "", "ledger": {}, "data": {}}
+        try:
+            if (p / "data.json").exists():
+                entry["data"] = json.load(open(p / "data.json", encoding="utf-8"))
+                entry["stamp"] = entry["data"].get("stamp", "")
+            if (p / "ledger.json").exists():
+                entry["ledger"] = json.load(open(p / "ledger.json", encoding="utf-8"))
+        except Exception as e:
+            log(f"machine {name}: could not read: {e}")
+        out.append(entry)
+        log(f"merged machine {name}: {len(entry['ledger'])} sessions, {len(entry['data'].get('products', []))} products")
+    return out
+
+
 # ---------- products: the things being built, found by their own files ----------
 PRODUCT_SIGNALS = {
     "ship_kit": re.compile(r"^(SHIP-KIT|LAUNCH-KIT|LAUNCH-CHECKLIST|GO-LIVE)[^/\\]*\.md$", re.I),
@@ -715,6 +777,8 @@ def build():
         if not rel or "AppData" in rel[0]:
             continue
         name = rel[0]
+        if name in exclude:
+            continue  # excluded folders (including the map's own) are never 'gone' projects
         if name not in projects:
             projects[name] = {"folder": ROOT / name, "exists": False}
 
@@ -772,6 +836,7 @@ def build():
     except Exception as e:
         log(f"file index skipped: {e}")
     products = detect_products(doc_roots)
+    machines = load_machines()
     elsewhere = {n: [] for n in names}
     min_mentions = int(CFG.get("min_mentions", 6))  # a folder listing mentions a name once or twice; real work mentions it many times
     for fp, hits in mentions.items():
@@ -831,10 +896,11 @@ def build():
     cowork_list = sorted([c for c in cowork if not c["auto"]], key=lambda s: s["last"] or datetime.datetime.min, reverse=True)
     claude_projects = load_claude_projects(accts)
     cowork_outputs = load_cowork_outputs(cowork)
+    publish_history(products, accts, cowork_outputs, claude_projects)
     return dict(accts=accts, current_key=current_key, current_info=current_info, rows=rows, tasks=tasks,
                 primary_email=primary_email, n_sessions=len(sessions), n_cowork=len(cowork), cowork=cowork_list,
                 mirrored=mirrored, ledger_n=ledger_n, search_up=search_up, search_port=int(CFG.get("search_port", 27183)),
-                claude_projects=claude_projects, cowork_outputs=cowork_outputs, products=products)
+                claude_projects=claude_projects, cowork_outputs=cowork_outputs, products=products, machines=machines, machine=MACHINE)
 
 
 # ---------- render ----------

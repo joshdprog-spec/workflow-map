@@ -24,6 +24,13 @@ except Exception:
     pass
 
 
+def machines():
+    try:
+        return [m for m in json.load(open(HERE / "config.json", encoding="utf-8")).get("machines", []) if m.get("path")]
+    except Exception:
+        return []
+
+
 def titles():
     try:
         L = json.load(open(LEDGER, encoding="utf-8"))
@@ -124,6 +131,20 @@ class H(BaseHTTPRequestHandler):
                 g["snippets"] = [{"role": r, "ts": ts, "html": mark(s)} for r, ts, s in g["snippets"]]
                 g.pop("best", None)
             files = search_index.search_files(DB, q)
+            for m in machines():
+                mdb = Path(m["path"]) / "search.sqlite"
+                if not mdb.exists():
+                    continue
+                try:
+                    mt = {k: (v.get("title") or "") for k, v in json.load(open(Path(m["path"]) / "ledger.json", encoding="utf-8")).items()} if (Path(m["path"]) / "ledger.json").exists() else {}
+                except Exception:
+                    mt = {}
+                for g in search_index.search(mdb, q):
+                    g["title"] = mt.get(g["session"], "") or "(untitled)"; g["folder"] = folder_of(g); g["machine"] = m["name"]
+                    g["snippets"] = [{"role": r, "ts": ts, "html": mark(s)} for r, ts, s in g["snippets"]]; g.pop("best", None); g["kind"] = "remote"
+                    res.append(g)
+                for f in search_index.search_files(mdb, q):
+                    f["machine"] = m["name"]; files.append(f)
             for f in files:
                 f["snippet"] = mark(f["snippet"] or "")
                 f["name"] = os.path.basename(f["path"])

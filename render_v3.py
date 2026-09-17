@@ -59,13 +59,40 @@ def build_data(D, CFG, HERE, NOW, ROOT):
     products = [{"name": x["name"], "stage": x["stage"], "project": x["project"], "folder": x["folder"], "where": x["where"], "page": x["page"], "tags": x.get("tags", ""),
                  "ship_kit": x["ship_kit"], "offer": x["offer"], "course": x["course"], "bundle": x["bundle"], "last": _iso(x["last"]), "n_files": x["n_files"]}
                 for x in D.get("products", [])]
+    # other machines
+    machines = []
+    for m in D.get("machines", []):
+        data = m.get("data", {})
+        for sid, e in m.get("ledger", {}).items():
+            folder = os.path.basename(e.get("cwd", "")) if e.get("cwd") else ", ".join(e.get("folders", [])[:3])
+            ledger.append({"id": sid, "t": e.get("title", ""), "d": (e.get("last_activity") or "")[:16], "f": folder, "a": ", ".join(e.get("accounts", [])),
+                           "k": e.get("kind", ""), "r": False, "m": m["name"]})
+        for p in data.get("products", []):
+            products.append(dict(p, m=m["name"], tags=p.get("tags", "")))
+        for a in data.get("artifacts", []):
+            if a.get("url") not in {x.get("url") for x in CFG.get("artifacts", [])}:
+                pass
+        for x in data.get("claude_projects", []):
+            cps.append({"name": x["name"], "desc": x.get("description", ""), "a": x.get("account", ""), "docs": x.get("docs", []), "synced": x.get("synced", ""), "m": m["name"]})
+        for o in data.get("outputs", []):
+            outputs.append({"t": o["title"], "a": o["account"], "d": o.get("last", ""), "folders": o.get("folders", []), "dir": o.get("dir", ""), "files": o.get("files", []), "m": m["name"]})
+        for a in data.get("accounts", []):
+            if not any(x["email"] == a["email"] for x in accounts):
+                accounts.append({"email": a["email"], "org": a.get("org", ""), "plan": a.get("plan", ""), "n_code": a.get("n_code", 0), "n_cowork": 0, "last": "", "current": False, "m": m["name"]})
+        machines.append({"name": m["name"], "stamp": m.get("stamp", ""), "n": len(m.get("ledger", {})), "path": m.get("path", "")})
+    ledger.sort(key=lambda r: r["d"], reverse=True)
+    remote_arts = []
+    for m in D.get("machines", []):
+        for a in m.get("data", {}).get("artifacts", []):
+            if a.get("url") not in {x.get("url") for x in CFG.get("artifacts", [])} and a.get("url") not in {x.get("url") for x in remote_arts}:
+                remote_arts.append(dict(a, m=m["name"]))
     return {
-        "meta": {"stamp": NOW.strftime("%a %b %d, %H:%M"), "n_projects": len(D["rows"]), "n_code": D["n_sessions"], "n_cowork": D["n_cowork"],
+        "meta": {"stamp": NOW.strftime("%a %b %d, %H:%M"), "n_projects": len(D["rows"]), "n_code": D["n_sessions"], "n_cowork": D["n_cowork"], "machine": D.get("machine", ""), "machines": machines,
                  "port": D.get("search_port", 27183), "primary": D["primary_email"], "current": cur_email, "mirror": mirror,
                  "hidden_code": hidden_code, "hidden_cw": hidden_cw, "ledger_n": len(ledger), "map_html": str(CFG.get("output_html", HERE / "00-WORKFLOW-MAP.html")),
                  "here": str(HERE), "group_order": CFG.get("group_order", [])},
         "accounts": accounts, "projects": projects, "ledger": ledger, "loose": loose, "tasks": tasks, "outputs": outputs, "claude_projects": cps, "products": products,
-        "artifacts": CFG.get("artifacts", []), "aliases": CFG.get("aliases", {}), "globals": CFG.get("global_pieces", []),
+        "artifacts": CFG.get("artifacts", []) + remote_arts, "aliases": CFG.get("aliases", {}), "globals": CFG.get("global_pieces", []),
     }
 
 
@@ -150,7 +177,7 @@ h1{font-size:26px;font-weight:700;margin:6px 0 4px;letter-spacing:-.01em}h2{font
 .row .note{color:var(--ink-2);font-size:13.5px;margin-top:2px}.row .ago{color:var(--mute);font-size:12.5px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .row .ago.hot{color:var(--acc);font-weight:600}
 .chip{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:999px;background:var(--surface-2);color:var(--mute);border:1px solid var(--line)}
-.chip.acc{background:color-mix(in srgb,var(--acc) 16%,transparent);color:var(--acc);border-color:transparent}.chip.cw{background:color-mix(in srgb,var(--acc-2) 16%,transparent);color:var(--acc-2);border-color:transparent}
+.chip.acc{background:color-mix(in srgb,var(--acc) 16%,transparent);color:var(--acc);border-color:transparent}.chip.mc{background:color-mix(in srgb,var(--acc-2) 14%,transparent);color:var(--acc-2);border-color:transparent}.chip.cw{background:color-mix(in srgb,var(--acc-2) 16%,transparent);color:var(--acc-2);border-color:transparent}
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}.chips .chip{cursor:pointer;padding:6px 12px;font-size:12px;letter-spacing:.04em;text-transform:none}.chips .chip.on{background:var(--acc);color:var(--acc-ink);border-color:transparent}
 .detail{grid-column:1/-1;border-top:1px solid var(--line);margin-top:8px;padding-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:14px;cursor:default}
 .detail .box{background:var(--surface-2);border-radius:10px;padding:10px 12px}.lbl{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute);margin-bottom:6px;font-weight:600}
@@ -200,6 +227,7 @@ function acctNote(a,k){if(!a||a===M.current||a==='terminal')return '';if(k==='co
 function copyBtn(cmd,label,primary){return '<button class="btn'+(primary?' primary':'')+'" data-copy="'+esc(cmd)+'">'+esc(label||'Copy resume')+'</button>'}
 function wireCopy(root){root.querySelectorAll('[data-copy]').forEach(function(b){if(b._w)return;b._w=1;b.addEventListener('click',async function(e){e.stopPropagation();try{await navigator.clipboard.writeText(b.dataset.copy);var t=b.textContent;b.textContent='Copied';b.classList.add('done');setTimeout(function(){b.textContent=t;b.classList.remove('done')},1400)}catch(err){prompt('Copy this:',b.dataset.copy)}})})}
 function kchip(k){return k==='cowork'?'<span class="chip cw k">Claude tab</span>':(k==='terminal'?'<span class="chip k">terminal</span>':'')}
+function mchip(m){return m?'<span class="chip mc k">on '+esc(m)+'</span>':''}
 function sessLine(s){var can=(s.k==='code'||s.k==='terminal')&&s.id&&s.id.length>20;return '<div class="sess"><span class="when">'+esc(ago(s.d))+'</span><span class="what">'+kchip(s.k)+(s.from?'<span class="chip k">from '+esc(s.from)+'</span>':'')+esc(s.t||'(untitled)')+'</span><span>'+(can?copyBtn('claude --resume '+s.id):'')+acctNote(s.a,s.k)+'</span></div>'}
 
 /* ---------- account pill + banner ---------- */
@@ -218,8 +246,9 @@ var rows=recent.map(function(p){var pick=p.work[0]||p.cowork[0];var cmd=pick&&pi
 return '<div class="row" data-open="'+esc(p.name)+'" tabindex="0"><div><div class="head"><span class="name">'+esc(p.name)+'</span><span class="chip">'+esc(p.group)+'</span></div><div class="note">'+(pick?esc(pick.t||'(untitled)')+' <span class="dim">· '+esc(ago(pick.d))+'</span>':'<span class="dim">no session yet</span>')+'</div></div><div>'+(cmd?copyBtn(cmd,'Copy resume',true):'')+'</div></div>'}).join('');
 var accts=D.accounts.map(function(a){return '<div class="acct'+(a.current?' on':'')+'"><b>'+esc(a.email)+'</b><span>'+a.n_code+' Code · '+a.n_cowork+' Claude-tab · last used '+esc(ago(a.last))+'</span>'+(a.current?'<span class="now">app is on this one</span>':'')+'</div>'}).join('');
 var prods=D.products.slice(0,showAllProds?999:6).map(function(p){var acts='';if(p.page)acts+='<a class="btn primary" href="http://127.0.0.1:'+M.port+'/file?path='+encodeURIComponent(p.page)+'" target="_blank">Open the page</a>';if(p.ship_kit)acts+='<a class="btn" href="http://127.0.0.1:'+M.port+'/file?path='+encodeURIComponent(p.ship_kit)+'" target="_blank">Launch checklist</a>';if(p.offer)acts+='<a class="btn" href="http://127.0.0.1:'+M.port+'/file?path='+encodeURIComponent(p.offer)+'" target="_blank">Offer</a>';if(p.course)acts+='<a class="btn" href="http://127.0.0.1:'+M.port+'/file?path='+encodeURIComponent(p.course)+'" target="_blank">Course</a>';
-return '<div class="prod"><span class="stage'+(p.stage==='Ready to launch'?' ready':'')+'">'+esc(p.stage)+'</span><h3>'+esc(p.name)+'</h3><div class="where">'+esc(p.where)+'</div><div class="dim" style="font-size:12.5px">in '+esc(p.project)+' · '+esc(ago(p.last))+(p.bundle?' · bundle ready':'')+'</div><div class="acts">'+acts+'</div></div>'}).join('');
-v.innerHTML='<h1>Where you left off</h1><p class="sub">The things you are building, then the projects you touched last. Copy a resume command, paste it in a terminal, and you are back inside that conversation.</p>'+banner+kpis+(prods?'<h2>Things you are building <span class="cnt">'+D.products.length+'</span></h2><div class="grid">'+prods+'</div>'+(D.products.length>6?'<div style="margin-top:10px"><button class="btn" id="all-prods">'+(showAllProds?'Show fewer':'Show all '+D.products.length)+'</button></div>':''):'')+'<h2>Pick up here</h2><div class="list">'+rows+'</div><h2>Accounts on this PC</h2><div class="acct-cards">'+accts+'</div>';
+return '<div class="prod"><span class="stage'+(p.stage==='Ready to launch'?' ready':'')+'">'+esc(p.stage)+'</span>'+mchip(p.m)+'<h3>'+esc(p.name)+'</h3><div class="where">'+esc(p.where)+'</div><div class="dim" style="font-size:12.5px">in '+esc(p.project)+' · '+esc(ago(p.last))+(p.bundle?' · bundle ready':'')+'</div><div class="acts">'+(p.m?'<span class="dim">files are on '+esc(p.m)+'</span>':acts)+'</div></div>'}).join('');
+var mach=(M.machines||[]).map(function(m){return '<div class="acct"><b>'+esc(m.name)+'</b><span>'+m.n+' sessions · reported '+esc(ago(m.stamp))+'</span></div>'}).join('');
+v.innerHTML='<h1>Where you left off</h1><p class="sub">The things you are building, then the projects you touched last. Copy a resume command, paste it in a terminal, and you are back inside that conversation.</p>'+banner+kpis+(prods?'<h2>Things you are building <span class="cnt">'+D.products.length+'</span></h2><div class="grid">'+prods+'</div>'+(D.products.length>6?'<div style="margin-top:10px"><button class="btn" id="all-prods">'+(showAllProds?'Show fewer':'Show all '+D.products.length)+'</button></div>':''):'')+'<h2>Pick up here</h2><div class="list">'+rows+'</div><h2>Accounts on this PC</h2><div class="acct-cards">'+accts+'</div>'+(mach?'<h2>Other computers</h2><div class="acct-cards">'+mach+'</div>':'');
 v.querySelectorAll('[data-open]').forEach(function(r){r.addEventListener('click',function(){location.hash='#projects/'+encodeURIComponent(r.dataset.open)})});wireCopy(v);
 var ap=document.getElementById('all-prods');if(ap)ap.addEventListener('click',function(){showAllProds=!showAllProds;renderHome()})}
 var showAllProds=false;
@@ -243,12 +272,14 @@ v.querySelectorAll('.row[data-p]').forEach(function(r){r.addEventListener('click
 /* ---------- SESSIONS ---------- */
 var sFilter={a:'All',k:'All'};
 function renderSessions(){var v=document.getElementById('view-sessions');
-var accts=['All'].concat(D.accounts.map(function(a){return a.email}));var kinds=['All','code','cowork','terminal'];var kl={All:'All kinds',code:'Code',cowork:'Claude tab',terminal:'Terminal'};
+var accts=['All'].concat(D.accounts.map(function(a){return a.email}));var kinds=['All','code','cowork','terminal'];var machs=['All',M.machine].concat((M.machines||[]).map(function(m){return m.name}));var kl={All:'All kinds',code:'Code',cowork:'Claude tab',terminal:'Terminal'};
 var chips='<div class="chips">'+accts.map(function(a){return '<span class="chip'+(a===sFilter.a?' on':'')+'" data-a="'+esc(a)+'">'+esc(a==='All'?'All accounts':a)+'</span>'}).join('')+'</div><div class="chips">'+kinds.map(function(k){return '<span class="chip'+(k===sFilter.k?' on':'')+'" data-k="'+k+'">'+kl[k]+'</span>'}).join('')+'</div>';
-var rows=D.ledger.filter(function(s){return (sFilter.a==='All'||(s.a||'').indexOf(sFilter.a)>=0)&&(sFilter.k==='All'||s.k===sFilter.k)}).slice(0,400);
+var mchips=(M.machines||[]).length?'<div class="chips">'+machs.map(function(m){return '<span class="chip'+((sFilter.m||'All')===m?' on':'')+'" data-m="'+esc(m)+'">'+esc(m==='All'?'All computers':m)+'</span>'}).join('')+'</div>':'';
+var rows=D.ledger.filter(function(s){var sm=s.m||M.machine;return (sFilter.a==='All'||(s.a||'').indexOf(sFilter.a)>=0)&&(sFilter.k==='All'||s.k===sFilter.k)&&((sFilter.m||'All')==='All'||sm===sFilter.m)}).slice(0,400);
 var out='',day='';rows.forEach(function(s){var d=(s.d||'').slice(0,10);if(d!==day){day=d;out+='<div class="day">'+esc(d||'undated')+'</div>'}
-out+='<div class="srow"><span class="when">'+esc((s.d||'').slice(11,16))+'</span><span class="what">'+kchip(s.k)+'<b>'+esc(s.t||'(untitled)')+'</b><span class="f">'+esc(s.f||'')+'</span></span><span>'+(s.r&&s.id.length>20?copyBtn('claude --resume '+s.id):'')+' '+acctNote((s.a||'').split(', ')[0],s.k)+'</span></div>'});
-v.innerHTML='<h1>Sessions</h1><p class="sub">Every session ever recorded, newest first, from both accounts. '+M.ledger_n+' in the ledger. Use the search box to find one by what was said.</p>'+chips+(out||'<div class="empty">Nothing matches.</div>');
+out+='<div class="srow"><span class="when">'+esc((s.d||'').slice(11,16))+'</span><span class="what">'+kchip(s.k)+mchip(s.m)+'<b>'+esc(s.t||'(untitled)')+'</b><span class="f">'+esc(s.f||'')+'</span></span><span>'+(s.r&&s.id.length>20?copyBtn('claude --resume '+s.id):'')+' '+(s.m?'':acctNote((s.a||'').split(', ')[0],s.k))+'</span></div>'});
+v.innerHTML='<h1>Sessions</h1><p class="sub">Every session ever recorded, newest first, from every account'+((M.machines||[]).length?' and every computer':'')+'. '+D.ledger.length+' in the ledger. Use the search box to find one by what was said.</p>'+chips+mchips+(out||'<div class="empty">Nothing matches.</div>');
+v.querySelectorAll('[data-m]').forEach(function(c){c.addEventListener('click',function(){sFilter.m=c.dataset.m;renderSessions()})});
 v.querySelectorAll('[data-a]').forEach(function(c){c.addEventListener('click',function(){sFilter.a=c.dataset.a;renderSessions()})});v.querySelectorAll('[data-k]').forEach(function(c){c.addEventListener('click',function(){sFilter.k=c.dataset.k;renderSessions()})});wireCopy(v)}
 
 /* ---------- ASSETS ---------- */
@@ -281,8 +312,8 @@ v.querySelectorAll('[data-open]').forEach(function(r){r.addEventListener('click'
 var deep=document.getElementById('deep'),dn=document.getElementById('deep-n'),fl=document.getElementById('files'),fn=document.getElementById('files-n');
 if(deepOK===false){deep.innerHTML='<div class="dim">Search server is not running. It starts with the next Claude session, or run <code>python "'+esc(M.here)+'\\search-server.py"</code>.</div>';dn.textContent='off';fl.innerHTML='';fn.textContent='off';return}
 fetch('http://127.0.0.1:'+M.port+'/search?q='+encodeURIComponent(v0),{mode:'cors'}).then(function(r){return r.json()}).then(function(all){var res=all.conversations||[],files=all.files||[];deepOK=true;dn.textContent=res.length;fn.textContent=files.length;
-fl.innerHTML=files.length?files.slice(0,25).map(function(f){return '<div class="frow"><div><div class="n"><a href="http://127.0.0.1:'+M.port+'/file?path='+encodeURIComponent(f.path)+'" target="_blank">'+esc(f.name)+'</a>'+(f.title?' <span class="t">'+esc(f.title)+'</span>':'')+'</div>'+(f.snippet?'<div class="t">'+f.snippet+'</div>':'')+'<div class="p">'+esc(f.rel)+'</div></div><div class="dim" style="font-size:12px;white-space:nowrap">'+esc(f.project)+'</div></div>'}).join(''):'<div class="dim">No file matches.</div>';
-deep.innerHTML=res.length?res.map(function(g){return '<div class="hit"><h3><a href="http://127.0.0.1:'+M.port+'/session?id='+encodeURIComponent(g.session)+'" target="_blank">'+esc(g.title)+'</a></h3><div class="meta">'+kchip(g.kind)+'<span>'+esc((g.last_ts||'').slice(0,16))+'</span><span>'+esc(g.folder||'')+'</span><span>'+esc(g.account||'')+'</span><span>'+g.hits+' matching messages</span>'+((g.kind==='code'||g.kind==='terminal')?copyBtn('claude --resume '+g.session):'')+'</div>'+g.snippets.map(function(s){return '<div class="snip"><span class="r">'+esc(s.role)+'</span>'+s.html+'</div>'}).join('')+'</div>'}).join(''):'<div class="dim">No conversation contains that.</div>';wireCopy(deep)}).catch(function(){deepOK=false;deep.innerHTML='<div class="dim">Conversation search is not reachable right now.</div>';dn.textContent='off'})}
+fl.innerHTML=files.length?files.slice(0,25).map(function(f){return '<div class="frow"><div><div class="n">'+mchip(f.machine)+(f.machine?esc(f.name||f.path.split(/[\\/]/).pop()):'<a href="http://127.0.0.1:'+M.port+'/file?path='+encodeURIComponent(f.path)+'" target="_blank">'+esc(f.name)+'</a>')+(f.title?' <span class="t">'+esc(f.title)+'</span>':'')+'</div>'+(f.snippet?'<div class="t">'+f.snippet+'</div>':'')+'<div class="p">'+esc(f.rel)+'</div></div><div class="dim" style="font-size:12px;white-space:nowrap">'+esc(f.project)+'</div></div>'}).join(''):'<div class="dim">No file matches.</div>';
+deep.innerHTML=res.length?res.map(function(g){return '<div class="hit"><h3>'+(g.machine?esc(g.title):'<a href="http://127.0.0.1:'+M.port+'/session?id='+encodeURIComponent(g.session)+'" target="_blank">'+esc(g.title)+'</a>')+'</h3><div class="meta">'+kchip(g.kind)+mchip(g.machine)+'<span>'+esc((g.last_ts||'').slice(0,16))+'</span><span>'+esc(g.folder||'')+'</span><span>'+esc(g.account||'')+'</span><span>'+g.hits+' matching messages</span>'+((g.kind==='code'||g.kind==='terminal')?copyBtn('claude --resume '+g.session):'')+'</div>'+g.snippets.map(function(s){return '<div class="snip"><span class="r">'+esc(s.role)+'</span>'+s.html+'</div>'}).join('')+'</div>'}).join(''):'<div class="dim">No conversation contains that.</div>';wireCopy(deep)}).catch(function(){deepOK=false;deep.innerHTML='<div class="dim">Conversation search is not reachable right now.</div>';dn.textContent='off'})}
 q.addEventListener('input',function(){var v0=q.value.trim();clearTimeout(deepT);if(!v0){if(location.hash==='#search')location.hash='#home';return}deepT=setTimeout(function(){lastQ=v0;if(location.hash!=='#search'){history.replaceState(null,'','#search')}show('search');renderSearch(v0)},220)});
 document.addEventListener('keydown',function(e){if(e.key==='/'&&document.activeElement!==q){e.preventDefault();q.focus()}if(e.key==='Escape'&&document.activeElement===q){q.value='';q.blur();location.hash='#home'}});
 
