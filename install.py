@@ -61,6 +61,9 @@ def write_config(dest, root):
         "min_mentions": 6,
         "mirror_sessions": False,
         "backup_transcripts": False,
+        "search_index": True,
+        "search_server": False,
+        "search_port": 8765,
         "exclude": exclude,
         "aliases": {},
         "group_order": [],
@@ -151,6 +154,7 @@ def main():
     ap.add_argument("--no-hook", action="store_true", help="do not add the SessionStart/SessionEnd hook")
     ap.add_argument("--no-skill", action="store_true", help="do not install the Claude skill")
     ap.add_argument("--keep-transcripts", action="store_true", help="raise Claude Code's transcript retention from 30 days to 10 years")
+    ap.add_argument("--search", action="store_true", help="keep a local conversation-search server running (127.0.0.1 only) so the map can search inside conversations")
     ap.add_argument("--uninstall", action="store_true")
     a = ap.parse_args()
     dest = Path(a.dir).expanduser().resolve()
@@ -168,9 +172,15 @@ def main():
         sys.exit("Python 3.9 or newer is required.")
     print(f"Installing Workflow Map to {dest}")
     dest.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(HERE / "build-map.py", dest / "build-map.py")
-    shutil.copy2(HERE / "README.md", dest / "README.md")
+    for fn in ("build-map.py", "search_index.py", "search-server.py", "README.md"):
+        shutil.copy2(HERE / fn, dest / fn)
     write_config(dest, Path(a.root).expanduser().resolve())
+    if a.search:
+        cfg_path = dest / "config.json"
+        cfg = json.load(open(cfg_path, encoding="utf-8"))
+        cfg["search_server"] = True
+        json.dump(cfg, open(cfg_path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
+        print("  conversation search server enabled (starts with the first build, restarts with each session)")
     if not a.no_skill:
         install_skill()
     if not a.no_hook:

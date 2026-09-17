@@ -68,9 +68,24 @@ Set `"backup_transcripts": true` to also keep a copy of every transcript under `
 
 Claude Code deletes terminal transcripts after 30 days by default. `python install.py --keep-transcripts` raises that to ten years by setting `cleanupPeriodDays` in your Claude settings.
 
-## Search everything
+## Search everything, including inside conversations
 
-The search box at the top filters the project cards and, at the same time, searches the full history ledger: every session ever seen, by title, folder, account, date or kind. Results list newest first with a copy-resume button where a session can be resumed.
+The search box at the top does three things at once:
+
+1. filters the project cards
+2. searches the history ledger: every session ever seen, by title, folder, account, date or kind
+3. searches **inside every conversation**: what you said and what Claude said, with highlighted snippets, grouped by session. Click a title to read the whole conversation.
+
+Number 3 uses a full-text index (`history/search.sqlite`, SQLite FTS5) that every rebuild keeps current. Only dialogue is indexed; tool output and file contents are not, so the index stays small (a few percent of the transcripts). Phrases in quotes work. Every word is required; the last word matches as a prefix.
+
+The map page is a plain file, so to query the index it talks to a tiny local server, `search-server.py`, on `127.0.0.1:8765`. Enable it with `python install.py --search` (or `"search_server": true` in config): the builder starts it if it is not running, at every session start. It listens on the loopback address only. It also works without the map:
+
+```bash
+python search-server.py --query "pricing decision"     # from a terminal, or from a Claude session
+python search-server.py --session <id>                 # print one whole conversation
+```
+
+Without the server the first two searches still work; the page just says conversation search is not running.
 
 ## The session-start line
 
@@ -91,6 +106,9 @@ The SessionStart hook prints one line into every new Claude session: how many pr
 | `min_mentions` | How many times a session must mention a project's folder name to count as having worked on it from another folder. Raise it if the "from" lines look noisy. |
 | `mirror_sessions` | Copy every Code session's sidebar record into every account, so any login shows all of them. Default off. |
 | `backup_transcripts` | Keep a copy of every transcript under `history/`. Default off. |
+| `search_index` | Maintain the full-text index of conversations. Default on. |
+| `search_server` | Keep the local search server running so the map can search inside conversations. Default off. |
+| `search_port` | Port for that server on 127.0.0.1. Default 8765. |
 | `automation_title_patterns` | Session titles matching these are scheduled-task runs, listed as counts rather than as work. |
 
 ## Files

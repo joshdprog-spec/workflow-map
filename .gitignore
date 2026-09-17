@@ -4,3 +4,5 @@ mention-cache.json
 last-run.log
 config.json
 __pycache__/
+
+history/

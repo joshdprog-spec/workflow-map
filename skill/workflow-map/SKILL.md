@@ -38,6 +38,14 @@ and read the path out of the hook `args`. The default is `~/workflow-map`. Outpu
 
 Add `"OldName": "NewName"` to `aliases` in `config.json` and rebuild. Old sessions then show under the new name instead of as a missing folder.
 
+## Searching inside conversations
+
+When the user asks "where did we decide X", "which session talked about Y", or wants something they said weeks ago, search the full-text index instead of guessing:
+
+    python "<map folder>/search-server.py" --query "the words"
+
+It prints matching sessions, newest-best first, with snippets and the resume id. `--session <id>` prints one whole conversation (dialogue only). Quote a phrase to require it exactly.
+
 ## Mirror and history
 
 - If the user has more than one Claude account on this machine and complains that sessions vanished after switching, set `"mirror_sessions": true` in `config.json`, rebuild, and tell them to sign out and back in once. Explain that the transcripts were never gone; only the sidebar is per account.

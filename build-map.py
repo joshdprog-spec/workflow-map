@@ -13,7 +13,7 @@ Reads:
 Writes nothing to stdout unless --verbose (SessionStart hooks feed stdout to
 the model, so the default is silent). Errors go to last-run.log.
 """
-import json, os, re, sys, glob, datetime, traceback, html, shutil
+import json, os, re, sys, glob, datetime, traceback, html, shutil, subprocess, socket
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -34,11 +34,32 @@ NOW = datetime.datetime.now()
 VERBOSE = "--verbose" in sys.argv
 UNMIRROR = "--unmirror" in sys.argv
 HOOK_EVENT = ""
-if not sys.stdin.isatty():
+
+
+def _read_hook_event():
+    """Claude Code pipes a JSON event on stdin when this runs as a hook. Anywhere else stdin may be a pipe that
+    never closes, so read it in a thread and give up after two seconds."""
+    global HOOK_EVENT
+    import threading
+    box = {}
+
+    def reader():
+        try:
+            box["v"] = json.loads(sys.stdin.read() or "{}").get("hook_event_name", "")
+        except Exception:
+            box["v"] = ""
     try:
-        HOOK_EVENT = json.loads(sys.stdin.read() or "{}").get("hook_event_name", "")
+        if sys.stdin is None or sys.stdin.isatty():
+            return
     except Exception:
-        HOOK_EVENT = ""
+        return
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+    t.join(2.0)
+    HOOK_EVENT = box.get("v", "")
+
+
+_read_hook_event()
 STATE_PAT = re.compile(r"(HANDOFF|STATE|START-HERE|WHERE-WE-ARE|CONTINUITY|-CURRENT|BLUEPRINT|CLAUDE\.md|README\.md|AUDIT-)", re.I)
 SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv", "venv", "dist", "build", ".next", ".claude"}
 AUTOMATION = [p.lower() for p in CFG.get("automation_title_patterns", [])]
@@ -406,6 +427,46 @@ def update_history(accts, sessions, cowork, transcripts_by_slug):
     return len(ledger)
 
 
+# ---------- conversation search ----------
+def update_search_index(entries):
+    """entries: [{path, session, kind, project, account}] for every transcript. Uses search_index.py next to this script."""
+    if not CFG.get("search_index", True):
+        return
+    try:
+        sys.path.insert(0, str(HERE))
+        import search_index
+        search_index.update_index(HERE / "history" / "search.sqlite", entries, log)
+    except Exception as e:
+        log(f"search index skipped: {e}")
+
+
+def ensure_search_server():
+    """Start search-server.py detached if nothing answers on the configured port."""
+    if not CFG.get("search_server"):
+        return False
+    port = int(CFG.get("search_port", 8765))
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        pass
+    script = HERE / "search-server.py"
+    if not script.exists():
+        return False
+    try:
+        kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
+        if sys.platform == "win32":
+            kw["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED_PROCESS | NEW_PROCESS_GROUP | NO_WINDOW
+        else:
+            kw["start_new_session"] = True
+        subprocess.Popen([sys.executable, str(script), "--port", str(port)], **kw)
+        log(f"search server started on 127.0.0.1:{port}")
+        return True
+    except Exception as e:
+        log(f"search server not started: {e}")
+        return False
+
+
 # ---------- projects ----------
 def last_touched(folder, max_depth=2):
     best = 0
@@ -518,6 +579,16 @@ def build():
             file_meta[str(c["transcript"])] = {"title": c["title"], "last": c["last"], "cli": c["cli"], "from": "Cowork: " + (", ".join(c["folders"][:2]) or "no folder"),
                                                "email": c["email"], "auto": c["auto"], "kind": "cowork", "folders": c["folders"]}
     mentions = scan_mentions(scan_files, names)
+    index_entries = [{"path": fp, "session": m["cli"], "kind": m["kind"], "project": (m["from"] if m["kind"] == "code" else ", ".join(m.get("folders", []))), "account": m["email"]}
+                     for fp, m in file_meta.items()]
+    # conversations held with no project folder (the desktop app's scratch workspaces) are conversations too
+    for pdir in (CLAUDE / "projects").iterdir() if (CLAUDE / "projects").exists() else []:
+        if pdir.is_dir() and "scratch-workspaces" in pdir.name:
+            for j in pdir.glob("*.jsonl"):
+                s_ = by_cli.get(j.stem)
+                index_entries.append({"path": str(j), "session": j.stem, "kind": "code", "project": "(no folder)", "account": s_["email"] if s_ else "terminal"})
+    update_search_index(index_entries)
+    search_up = ensure_search_server()
     elsewhere = {n: [] for n in names}
     min_mentions = int(CFG.get("min_mentions", 6))  # a folder listing mentions a name once or twice; real work mentions it many times
     for fp, hits in mentions.items():
@@ -577,7 +648,7 @@ def build():
     cowork_list = sorted([c for c in cowork if not c["auto"]], key=lambda s: s["last"] or datetime.datetime.min, reverse=True)
     return dict(accts=accts, current_key=current_key, current_info=current_info, rows=rows, tasks=tasks,
                 primary_email=primary_email, n_sessions=len(sessions), n_cowork=len(cowork), cowork=cowork_list,
-                mirrored=mirrored, ledger_n=ledger_n)
+                mirrored=mirrored, ledger_n=ledger_n, search_up=search_up, search_port=int(CFG.get("search_port", 8765)))
 
 
 # ---------- render ----------
@@ -818,7 +889,7 @@ def render_html(D):
     globals_html = "".join(f'<li><span class="what"><b>{E(l)}</b></span><code>{E(p)}</code></li>' for l, p in CFG.get("global_pieces", []))
 
     css = CSS_V2
-    js = JS_V2
+    js = JS_V2.replace("{port}", str(D["search_port"])).replace("{{", "{").replace("}}", "}")
     stamp = NOW.strftime("%a %b %d, %H:%M")
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>Workflow Map</title>'
@@ -830,7 +901,9 @@ def render_html(D):
             f'"Copy resume command" puts a terminal command on your clipboard that reopens that exact session in that folder.</p>'
             f'{banner}<div class="accts">{acct_cards}</div>'
             f'<div class="toolbar"><input id="q" type="search" placeholder="Search every project and every session ever, e.g. valorant, priced in, medkit, august" aria-label="Search projects and sessions"></div>'
-            f'<div id="hits" class="hits" hidden><div class="hits-head"><span id="hits-n"></span> <span class="dim">matching sessions in the full history. Newest first.</span></div><ul id="hits-list" class="sess-list"></ul></div>'
+            f'<div id="hits" class="hits" hidden><div class="hits-head"><span id="hits-n"></span> <span class="dim">sessions whose title, folder, account or date match. Newest first.</span></div><ul id="hits-list" class="sess-list"></ul></div>'
+            f'<div id="deep" class="hits deep" hidden><div class="hits-head"><span id="deep-n"></span> <span class="dim">conversations that contain it. Click a title to read the whole conversation.</span> <a id="deep-link" href="http://127.0.0.1:{D["search_port"]}/" target="_blank">Open conversation search</a></div><div id="deep-list"></div></div>'
+            f'<div id="deep-off" class="dim" hidden>Conversation search is not running. It starts with the next Claude session, or run <code>python "{E(str(HERE / "search-server.py"))}"</code>.</div>'
             f'<script id="ledger" type="application/json">{ledger_json}</script>'
             f'{sections}'
             f'<section><h2>Claude-tab sessions with no project folder <small>{len(loose)}</small></h2><ul class="plain">{loose_html or "<li class=dim>none</li>"}</ul></section>'
@@ -916,6 +989,12 @@ details[open] summary::before{transform:rotate(90deg)}
 .hits{background:var(--surface);border:1px solid var(--acc);border-radius:12px;padding:12px 16px;margin:6px 0 4px}
 .hits-head{font-weight:600;margin-bottom:6px}.hits .sess-list li{grid-template-columns:auto 1fr auto auto}
 .hits .f{color:var(--mute);font-size:12.5px;white-space:nowrap}
+.deep .hit{padding:8px 0;border-top:1px solid var(--line-soft)}.deep .hit:first-child{border-top:0}
+.deep .hit h4{margin:0;font-size:15px}.deep .hit h4 a{color:inherit;text-decoration:none}.deep .hit h4 a:hover{text-decoration:underline}
+.deep .meta{color:var(--mute);font-size:12.5px;display:flex;gap:10px;flex-wrap:wrap}
+.deep .snip{margin:4px 0 0;padding:3px 10px;border-left:3px solid var(--line);font-size:13.5px}
+.deep .snip .r{color:var(--mute);font-size:11px;margin-right:6px;text-transform:uppercase;letter-spacing:.06em}
+mark{background:var(--warn-bg);color:inherit;padding:0 2px;border-radius:2px}
 code{font-family:"JetBrains Mono",Consolas,monospace;font-size:12.5px;background:var(--code-bg);padding:1px 5px;border-radius:4px}
 s{color:var(--mute)}
 @media(max-width:700px){h1{font-size:32px}.banner{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.sess-list li,.plain li{grid-template-columns:1fr;gap:2px}.act{white-space:normal}}
@@ -935,7 +1014,15 @@ if(!v){hits.hidden=true;return}
 var words=v.split(/\\s+/),m=LEDGER.filter(function(r){var h=(r.t+' '+r.f+' '+r.a+' '+r.d+' '+r.k).toLowerCase();return words.every(function(w){return h.indexOf(w)>=0})});
 hn.textContent=m.length;hits.hidden=false;
 hl.innerHTML=m.slice(0,60).map(function(r){var k=r.k==='cowork'?'<span class="k k-cw">Claude tab</span>':(r.k==='terminal'?'<span class="k k-from">terminal</span>':'');var c=r.r&&r.id.length>20?'<button class="copy" data-copy="claude --resume '+esc(r.id)+'">copy resume</button>':'';return '<li><span class="when">'+esc(r.d||'')+'</span><span class="what">'+k+esc(r.t||'(untitled)')+'</span><span class="f">'+esc(r.f||'')+'</span><span class="act">'+c+'<span class="dim">'+esc(r.a||'')+'</span></span></li>'}).join('')+(m.length>60?'<li class="dim">and '+(m.length-60)+' more. Narrow the search.</li>':'');
-wire()});
+wire();deep(v)});
+var PORT={port},deepOK=null,deepT=null,deepEl=document.getElementById('deep'),deepList=document.getElementById('deep-list'),deepN=document.getElementById('deep-n'),deepOff=document.getElementById('deep-off'),deepLink=document.getElementById('deep-link');
+fetch('http://127.0.0.1:'+PORT+'/ping',{{mode:'cors'}}).then(function(r){{deepOK=r.ok}}).catch(function(){{deepOK=false}});
+function deep(v){{clearTimeout(deepT);if(!v){{deepEl.hidden=true;deepOff.hidden=true;return}}
+deepT=setTimeout(function(){{if(deepOK===false){{deepOff.hidden=false;deepEl.hidden=true;return}}
+fetch('http://127.0.0.1:'+PORT+'/search?q='+encodeURIComponent(v),{{mode:'cors'}}).then(function(r){{return r.json()}}).then(function(res){{deepOK=true;deepOff.hidden=true;deepEl.hidden=false;deepN.textContent=res.length;deepLink.href='http://127.0.0.1:'+PORT+'/?q='+encodeURIComponent(v);
+deepList.innerHTML=res.length?res.map(function(g){{var k=g.kind==='cowork'?'<span class="k k-cw">Claude tab</span>':'';var rs=(g.kind==='code'||g.kind==='terminal')?'<button class="copy" data-copy="claude --resume '+esc(g.session)+'">copy resume</button>':'';
+return '<div class="hit"><h4>'+k+'<a href="http://127.0.0.1:'+PORT+'/session?id='+encodeURIComponent(g.session)+'" target="_blank">'+esc(g.title)+'</a></h4><div class="meta"><span>'+esc((g.last_ts||'').slice(0,16))+'</span><span>'+esc(g.folder||'')+'</span><span>'+esc(g.account||'')+'</span><span>'+g.hits+' matching messages</span>'+rs+'</div>'+g.snippets.map(function(s){{return '<div class="snip"><span class="r">'+esc(s.role)+'</span>'+s.html+'</div>'}}).join('')+'</div>'}}).join(''):'<div class="dim">No conversation contains that.</div>';
+deepList.querySelectorAll('.copy').forEach(function(b){{b.onclick=async function(){{try{{await navigator.clipboard.writeText(b.dataset.copy);b.textContent='Copied'}}catch(e){{prompt('Copy this:',b.dataset.copy)}}}}}})}}).catch(function(){{deepOK=false;deepOff.hidden=false;deepEl.hidden=true}})}},250)}}
 """
 
 
